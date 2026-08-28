@@ -1,0 +1,38 @@
+bundle:
+  name: preceptor-observer-behavior
+  version: 0.1.0
+  description: |
+    Trajectory observer. Appends raw structural form records off the model's path.
+    Never gates, never injects, never classifies. Consent-gated, default off.
+
+hooks:
+  - module: hooks-trajectory-observer
+    source: ../modules/hooks-trajectory-observer
+    config:
+      # Consent gate. Nothing is recorded until this is explicitly true.
+      # See docs/CONSENT.md. Set in ~/.amplifier/settings.yaml, not here.
+      enabled: false
+
+      # Where observation records land. One JSONL file per session.
+      root: ~/.amplifier/projects/{project}/preceptor
+
+      # Buffer in memory; flush at run boundaries and at session cleanup.
+      # Hook handlers run sequentially and IN-BAND, so per-event disk writes
+      # would add latency to every tool call.
+      flush_every: 25
+
+      # Retention for raw observation records, in days. Records are the
+      # sensitive artifact; the derived ledger is not.
+      retention_days: 90
+
+      # Runs behind hooks-logging (100). An observer must never precede anything.
+      priority: 200
+
+      # One-time schema discovery. Event payload keys are untyped dict literals
+      # with no schema and no tests behind them — dump what actually arrives
+      # before trusting any key name.
+      record_payload_shapes: true
+
+context:
+  include:
+    - preceptor:context/awareness.md

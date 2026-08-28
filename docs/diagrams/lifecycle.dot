@@ -1,0 +1,39 @@
+// The cue state machine. Nothing is ever hard-deleted.
+//   render: dot -Tsvg docs/diagrams/lifecycle.dot -o docs/diagrams/lifecycle.svg
+//   No legend nodes: with rankdir=LR they land in the rightmost rank and stretch the
+//   graph until README-scale text is unreadable. That commentary lives in the README.
+digraph cue_lifecycle {
+  rankdir=LR;
+  bgcolor="transparent";
+  splines=spline;
+  nodesep=0.40;
+  ranksep=0.95;
+  fontname="Helvetica";
+
+  node [shape=box style="rounded,filled" fontname="Helvetica" fontsize=15
+        color="#94A3B8" fontcolor="#0F172A" penwidth=1.5 margin="0.22,0.14"];
+  edge [fontname="Helvetica" fontsize=12 color="#475569" fontcolor="#334155" penwidth=1.5];
+
+  proposed [label="proposed\ndosed, not trusted"    fillcolor="#E0E7FF"];
+  active   [label="active\ndosed"                    fillcolor="#DCFCE7"];
+  shadowed [label="shadowed\nNOT dosed —\nstill counted" fillcolor="#FEF3C7" penwidth=2.6 color="#D97706"];
+  faded    [label="faded\nkept with\nits evidence"   fillcolor="#F1F5F9"];
+  struck   [label="struck"                           fillcolor="#FEE2E2"];
+
+  proposed -> struck [label=" changed\l nothing\l" color="#B91C1C" fontcolor="#B91C1C"];
+
+  proposed -> active [label=" promote\l verdict = positive\l n ≥ 5 per arm\l"
+                      color="#15803D" fontcolor="#15803D" penwidth=2.2];
+
+  active -> shadowed [label=" shadow\l notify BEFORE\l dosing stops\l"
+                      color="#D97706" fontcolor="#B45309" penwidth=2.2];
+
+  shadowed -> faded [label=" retire\l verdict = no-effect\l clean window\l"
+                     color="#C2410C" fontcolor="#C2410C" penwidth=2.2];
+
+  shadowed -> active [label=" a violation reappeared\l auto-restore + pin\l"
+                      color="#1D4ED8" fontcolor="#1D4ED8" penwidth=2.6];
+
+  faded -> shadowed [label=" fingerprint changed\l" color="#7C3AED" fontcolor="#7C3AED"
+                     style=dashed constraint=false];
+}

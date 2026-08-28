@@ -1,0 +1,56 @@
+# ── Runtime artifacts of this bundle ──────────────────────────────────────────
+# These derive from real sessions. They are the sensitive output of the system
+# and must never reach a public repo. See docs/CONSENT.md.
+observations/
+manifests/
+assessments/
+ledger/
+state.json
+payload-shapes.json
+*.observations.jsonl
+bench-results/
+
+# ── Secrets and local config ──────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+secrets.*
+settings.local.*
+.amplifier/
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.python-version
+# Modules here are libraries, not applications — no lockfile is committed.
+uv.lock
+
+# ── Test and lint caches ──────────────────────────────────────────────────────
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.coverage
+htmlcov/
+*.log
+
+# ── Editors and OS ────────────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Node (only if a doc toolchain ever lands here) ────────────────────────────
+node_modules/

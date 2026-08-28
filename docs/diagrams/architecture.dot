@@ -1,0 +1,77 @@
+// How the bundle composes. Two entry points, one behavior chain, three local modules.
+//   render: dot -Tsvg docs/diagrams/architecture.dot -o docs/diagrams/architecture.svg
+digraph preceptor_architecture {
+  rankdir=TB;
+  bgcolor="transparent";
+  splines=spline;   // NOT ortho: graphviz silently drops edge labels on ortho edges
+  nodesep=0.40;
+  ranksep=0.60;
+  fontname="Helvetica";
+  compound=true;
+
+  node [shape=box style="rounded,filled" fontname="Helvetica" fontsize=10
+        color="#94A3B8" fontcolor="#0F172A" penwidth=1.2 margin="0.16,0.09"];
+  edge [fontname="Helvetica" fontsize=9 color="#64748B" fontcolor="#475569" penwidth=1.1];
+
+  foundation [label="amplifier-foundation\l(git URL)\l" fillcolor="#E2E8F0" shape=component];
+
+  subgraph cluster_entry {
+    label="  entry points  "; fontsize=10; fontcolor="#475569";
+    color="#CBD5E1"; style="rounded";
+    root [label="bundle.md\lfull loop\l" fillcolor="#DBEAFE" penwidth=2.0 color="#2563EB"];
+    obs_only [label="bundles/observe-only.yaml\ladoption path — start here\l" fillcolor="#DCFCE7" penwidth=2.0 color="#16A34A"];
+  }
+
+  subgraph cluster_behaviors {
+    label="  behaviors (composed, not duplicated)  "; fontsize=10; fontcolor="#475569";
+    color="#CBD5E1"; style="rounded";
+    b_full [label="preceptor.yaml\l" fillcolor="#EFF6FF"];
+    b_obs  [label="preceptor-observer.yaml\l" fillcolor="#EFF6FF"];
+  }
+
+  subgraph cluster_modules {
+    label="  modules (local — no sibling bundles)  "; fontsize=10; fontcolor="#475569";
+    color="#CBD5E1"; style="rounded";
+    m_obs  [label="hooks-trajectory-observer\lpriority 200 · buffered\l" fillcolor="#F1F5F9"];
+    m_inj  [label="hooks-cue-injector\lpriority 20 · provider:request\l" fillcolor="#F1F5F9"];
+    m_tool [label="tool-preceptor\lledger · gates · autonomy lock\l" fillcolor="#F1F5F9"];
+  }
+
+  subgraph cluster_agents {
+    label="  agents (per-agent tool scoping)  "; fontsize=10; fontcolor="#475569";
+    color="#CBD5E1"; style="rounded";
+    a_form [label="form-analyst\lreasoning\l"  fillcolor="#F5F3FF"];
+    a_skep [label="skeptic\lcritique\l"        fillcolor="#F5F3FF"];
+    a_cred [label="credentialer\lWRITE\l"      fillcolor="#FEF3C7" penwidth=2.0 color="#D97706"];
+    a_asse [label="assessor\lgeneral\l"        fillcolor="#F5F3FF"];
+  }
+
+  ctx [label="context/awareness.md  ~226 tok\lcontext/cue-awareness.md  ~384 tok\l"
+       shape=note fillcolor="#F8FAFC" fontsize=9];
+  meth [label="context/methodology/*.md\l@mentioned inside agents only —\lzero cost until an agent spawns\l"
+        shape=note fillcolor="#F8FAFC" fontsize=9];
+
+  root     -> foundation;
+  obs_only -> foundation;
+  root     -> b_full   [label="  includes"];
+  obs_only -> b_obs    [label="  includes"];
+  b_full   -> b_obs    [label="  includes" color="#16A34A" fontcolor="#15803D" penwidth=1.8];
+
+  b_obs  -> m_obs;
+  b_obs  -> ctx [style=dotted];
+  b_full -> m_inj;
+  b_full -> m_tool [label="  writable: false"];
+  b_full -> ctx [style=dotted];
+  b_full -> a_form; b_full -> a_skep; b_full -> a_cred; b_full -> a_asse;
+
+  a_cred -> m_tool [label="  writable: TRUE" color="#D97706" fontcolor="#B45309" penwidth=1.8];
+  a_form -> meth [style=dotted]; a_skep -> meth [style=dotted]; a_asse -> meth [style=dotted];
+
+  note [shape=plaintext fillcolor="transparent" fontsize=9 fontcolor="#475569"
+    label=<<table border="1" cellborder="0" cellspacing="3" cellpadding="4" color="#94A3B8" bgcolor="#F8FAFC">
+      <tr><td align="left"><b>Only credentialer can write the ledger.</b> Per-agent</td></tr>
+      <tr><td align="left"><i>tools:</i> frontmatter, not a spawn policy. Each agent</td></tr>
+      <tr><td align="left">gets its own configured instance of the same module.</td></tr>
+    </table>>];
+  { rank=sink; note; }
+}

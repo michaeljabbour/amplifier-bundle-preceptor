@@ -1,0 +1,64 @@
+// The closed loop. Blue path = what every context system has. Orange = what almost none has.
+//   render: dot -Tsvg docs/diagrams/loop.dot -o docs/diagrams/loop.svg
+//   Labels are kept SHORT on purpose: this is embedded at ~900px in the README,
+//   and width is what kills legibility. Prose belongs in the README, not the graph.
+digraph preceptor_loop {
+  rankdir=TB;
+  bgcolor="transparent";
+  splines=spline;
+  nodesep=0.35;
+  ranksep=0.50;
+  fontname="Helvetica";
+
+  node [shape=box style="rounded,filled" fontname="Helvetica" fontsize=14
+        color="#94A3B8" fontcolor="#0F172A" penwidth=1.4 margin="0.20,0.12"];
+  edge [fontname="Helvetica" fontsize=12 color="#64748B" fontcolor="#475569" penwidth=1.4];
+
+  session [label="your session" fillcolor="#E2E8F0" shape=box3d fontsize=15];
+
+  subgraph cluster_watch {
+    label="WATCH — off the model's path"; fontsize=13; fontcolor="#334155";
+    color="#CBD5E1"; style="rounded"; penwidth=1.4;
+    observer [label="trajectory observer" fillcolor="#DBEAFE"];
+    obs      [label="observations.jsonl\nstructure, never content" fillcolor="#F8FAFC" shape=note];
+  }
+
+  subgraph cluster_think {
+    label="DECIDE — offline, batch"; fontsize=13; fontcolor="#334155";
+    color="#CBD5E1"; style="rounded"; penwidth=1.4;
+    analyst  [label="form-analyst\nproposes from real failures" fillcolor="#DCFCE7"];
+    skeptic  [label="skeptic\nattacks every proposal" fillcolor="#DCFCE7"];
+    assessor [label="assessor\nruns probes · n ≥ 5" fillcolor="#DCFCE7"];
+  }
+
+  subgraph cluster_write {
+    label="RECORD — one writer, gated"; fontsize=13; fontcolor="#334155";
+    color="#CBD5E1"; style="rounded"; penwidth=1.4;
+    cred   [label="credentialer" fillcolor="#FEF3C7"];
+    ledger [label="ledger.yaml\ngit-tracked" fillcolor="#F8FAFC" shape=note];
+  }
+
+  subgraph cluster_dose {
+    label="DOSE — never silent"; fontsize=13; fontcolor="#334155";
+    color="#CBD5E1"; style="rounded"; penwidth=1.4;
+    injector [label="cue injector" fillcolor="#DBEAFE"];
+    manifest [label="manifest.json\nimmutable" fillcolor="#F8FAFC" shape=note];
+    receipt  [label="receipt you see" fillcolor="#FFE4E6"];
+  }
+
+  session  -> observer [label=" events"];
+  observer -> obs;
+  obs      -> analyst  [label=" batch"];
+  analyst  -> skeptic;
+  skeptic  -> assessor;
+  assessor -> cred     [label=" positive delta"];
+  cred     -> ledger;
+  ledger   -> injector [label=" active only"];
+  injector -> manifest [style=dashed];
+  injector -> receipt  [style=dashed];
+  injector -> session  [label=" [cue:id]" color="#1D4ED8" fontcolor="#1D4ED8" penwidth=1.8];
+  receipt  -> session  [color="#BE123C" style=dashed];
+
+  ledger -> assessor [label=" ablate:\l does removing\l this change\l anything?\l"
+                      color="#C2410C" fontcolor="#C2410C" penwidth=2.4 constraint=false];
+}

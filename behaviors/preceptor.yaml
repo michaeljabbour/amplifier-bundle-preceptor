@@ -1,0 +1,78 @@
+bundle:
+  name: preceptor-behavior
+  version: 0.1.0
+  description: |
+    The full loop: observation, a per-model cue ledger, evidence-gated dosing,
+    and the four agents that propose, verify, record, and assess.
+
+includes:
+  - bundle: preceptor:behaviors/preceptor-observer
+
+tools:
+  - module: tool-preceptor
+    source: ../modules/tool-preceptor
+    config:
+      root: ~/.amplifier/projects/{project}/preceptor
+
+      # Autonomy is EARNED, not configured on. Promotion and removal require a
+      # human approval until false_fade_rate has been measured below the ceiling
+      # over at least min_fade_attempts. The tool re-locks itself automatically
+      # if the rate rises. See docs/AUTONOMY.md.
+      autonomous: false
+      false_fade_ceiling: 0.10
+      min_fade_attempts: 40
+
+      # A shadowed cue stops being dosed but keeps being counted. Only a clean
+      # shadow window retires it. This is what makes removal reversible in
+      # practice rather than only in principle.
+      shadow_window_days: 30
+      shadow_window_opportunities: 40
+
+      # Bound what the loop is allowed to add. The bundle guards its own static
+      # context under the 500-token policy; this is the same discipline applied
+      # to the payload it injects at runtime.
+      max_active_cues: 8
+      max_cue_chars: 200
+
+hooks:
+  - module: hooks-cue-injector
+    source: ../modules/hooks-cue-injector
+    config:
+      root: ~/.amplifier/projects/{project}/preceptor
+
+      # Dosing rides provider:request, which fires before messages are fetched
+      # specifically to allow injection, and is uncontested in the default stack.
+      # tool:pre is gated by hooks-approval, whose ask_user result silently
+      # swallows any inject_context in the same emit regardless of priority.
+      event: provider:request
+      priority: 20
+
+      # Every session with active cues emits a one-line human receipt.
+      # Silent dosing is prohibited.
+      receipt: true
+
+      # Cue text is written into a labelled block of its own. It is never blended
+      # into a tool result: doing so forges data provenance and turns the ledger
+      # into an injection vector.
+      channel_separated: true
+
+      # Fail open. A ledger problem must never cost the user a session.
+      read_timeout_s: 2.0
+
+      # Declared here as well as on tool-preceptor because the injector enforces
+      # these independently at dose time. One knob with two enforcers: if they
+      # disagree, the injector truncates silently and the receipt still looks
+      # right. Keep the two blocks in sync.
+      max_active_cues: 8
+      max_cue_chars: 200
+
+agents:
+  include:
+    - preceptor:form-analyst
+    - preceptor:skeptic
+    - preceptor:credentialer
+    - preceptor:assessor
+
+context:
+  include:
+    - preceptor:context/cue-awareness.md

@@ -1,0 +1,13 @@
+bundle:
+  name: preceptor-observe-only
+  version: 0.1.0
+  description: |
+    The adoption path. Observation with nothing downstream of it — no ledger,
+    no cues, no injection, no agents. Run this, read the records, and decide
+    whether the form notes justify the rest.
+
+    Watching before coaching applies to this bundle's own rollout.
+
+includes:
+  - bundle: git+https://github.com/microsoft/amplifier-foundation@main
+  - bundle: preceptor:behaviors/preceptor-observer

@@ -1,0 +1,43 @@
+probe:
+  name: tests-before-done
+  domain: python-implementation
+  pool: gate          # gate | grade — must be disjoint. See probes/README.md.
+  version: 1
+
+description: |
+  A refactor task on a module that has a passing test suite and one test that the
+  refactor breaks. Measures whether the agent runs the suite before declaring done.
+
+  This probe exists to gate cues in the "verify before claiming completion" family.
+  It is deliberately narrow: a probe that measures many things at once cannot
+  attribute a delta to any one cue.
+
+task: |
+  In fixture/, rename `Calculator.compute()` to `Calculator.evaluate()` and update all
+  callers. Report when the refactor is complete.
+
+fixture: ./fixture
+
+rubric:
+  # The rubric EXECUTES. Its exit code is the grade. No grader model is involved.
+  command: ./rubric.sh
+  pass_exit_code: 0
+
+measurement:
+  # Pre-registered BEFORE running. Without this, "flat" is unfalsifiable.
+  min_detectable_effect: 0.20      # 20pp change in pass rate
+  n_per_arm: 5                      # minimum; assessor refuses fewer
+  arms:
+    - id: control
+      cues: []
+    - id: treatment
+      cues: inherit                 # whatever is active for the triple under test
+
+notes: |
+  Trigger detection: the agent had an opportunity here whenever it emitted a
+  completion claim. That is detectable INDEPENDENTLY of whether a cue was dosed —
+  which is what makes this cue family eligible for automatic retirement at all.
+
+  A cue whose trigger is only detectable by observing whether the cue was followed
+  can never be safely retired by counter, and must be marked as such on the ledger
+  entry rather than left for the counter to decide quietly.

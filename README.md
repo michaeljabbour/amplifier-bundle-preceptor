@@ -66,17 +66,19 @@ rollout.
 amplifier run --bundle 'git+https://github.com/michaeljabbour/amplifier-bundle-preceptor@main#subdirectory=bundles/observe-only.yaml'
 ```
 
-Recording is **off until you turn it on.** In `~/.amplifier/settings.yaml`:
+That bundle **records nothing.** The observer ships `enabled: false`, so the command above
+verifies the bundle loads and does no more. Recording starts only when you choose the bundle
+whose name says so:
 
-```yaml
-modules:
-  hooks:
-    - module: hooks-trajectory-observer
-      config:
-        enabled: true
+```bash
+amplifier run --bundle 'git+https://github.com/michaeljabbour/amplifier-bundle-preceptor@main#subdirectory=bundles/observe-on.yaml'
 ```
 
-Run it for two weeks. Read what it saw. *Then* decide whether the rest is warranted:
+Picking that bundle *is* the consent act. There is deliberately no settings-file stanza —
+an earlier draft documented one, a Digital Twin run proved it inert (no records, no error,
+no way to tell which), and a consent control that fails silently is worse than none.
+
+Run it for a couple of weeks. Read what it saw. *Then* decide whether the rest is warranted:
 
 ```bash
 amplifier run --bundle git+https://github.com/michaeljabbour/amplifier-bundle-preceptor@main

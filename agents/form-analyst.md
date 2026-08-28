@@ -31,12 +31,13 @@ tools:
   - module: tool-filesystem
     source: git+https://github.com/microsoft/amplifier-module-tool-filesystem@main
   - module: tool-preceptor
-    # NOT ../modules — agent-file sources are the one channel foundation does NOT
-    # resolve against the declaring file's directory. They resolve against the
-    # composed bundle's base_path, i.e. the repo root. Getting this wrong fails
-    # SILENTLY (activator strict=False): the tool mounts in zero agents and only
-    # logs. Do not "correct" this to match the behaviors' ../modules form.
-    source: ./modules/tool-preceptor
+    # Git URL, not a relative path. VERIFIED IN A DIGITAL TWIN: relative sources in
+    # AGENT frontmatter resolve against neither the repo root nor the agent's own
+    # directory -- they landed inside an unrelated sibling bundle's behaviors/ dir
+    # (amplifier-bundle-wayfinder/behaviors/modules/tool-preceptor) and the session
+    # refused to start in strict mode. Behaviors CAN use ../modules; agent files
+    # cannot use any relative form. See AGENTS.md.
+    source: git+https://github.com/michaeljabbour/amplifier-bundle-preceptor@main#subdirectory=modules/tool-preceptor
     config:
       writable: false
 ---

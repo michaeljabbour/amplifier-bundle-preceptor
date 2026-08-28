@@ -5,16 +5,22 @@ Preceptor watches how you work. Read this before enabling it.
 ## Default: off
 
 `enabled: false` ships as the default in `behaviors/preceptor-observer.yaml`. With it off,
-`mount()` registers nothing at all — no handlers, no files, no overhead. Turning it on is a
-deliberate act, taken in `~/.amplifier/settings.yaml`:
+`mount()` registers nothing at all — no handlers, no files, no overhead. Verified empirically
+in a Digital Twin: a full session with tool calls produced zero files anywhere on the
+filesystem.
 
-```yaml
-modules:
-  hooks:
-    - module: hooks-trajectory-observer
-      config:
-        enabled: true
+Turning it on is a deliberate act — you choose a different bundle:
+
+```bash
+amplifier run --bundle 'git+https://github.com/michaeljabbour/amplifier-bundle-preceptor@main#subdirectory=bundles/observe-on.yaml'
 ```
+
+**There is no settings-file stanza, on purpose.** An earlier draft documented one
+(`modules.hooks[].config.enabled` in `~/.amplifier/settings.yaml`). A Digital Twin run proved
+it inert: the session ran, exit code 0, and zero observation records were written — no error,
+no warning, no way for a user to tell whether they had opted in or not. A consent control that
+silently fails open-or-closed is worse than no control, so it was removed rather than
+documented with a caveat.
 
 ## What is recorded
 

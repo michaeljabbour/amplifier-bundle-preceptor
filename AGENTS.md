@@ -40,7 +40,17 @@ and is structurally identical to prompt injection.
 ## Module conventions
 
 - `source: ../modules/<name>` from a behavior; `./modules/<name>` from `bundle.md`. Relative
-  paths, never git URLs, so forks and local dev work.
+  paths there, never git URLs, so forks and local dev work.
+- **Agent frontmatter is the exception and it must use a git URL.** Relative sources in
+  `agents/*.md` resolve against neither the repo root nor the agent's own directory. Verified
+  in a Digital Twin: `./modules/tool-preceptor` resolved to
+  `amplifier-bundle-wayfinder/behaviors/modules/tool-preceptor` — inside an unrelated sibling
+  bundle — and the session refused to start under strict mode. Do not "simplify" these back to
+  a relative path.
+- **Consent and other user-facing switches are bundle-composition overrides, not
+  `settings.yaml` stanzas.** The settings form was documented, shipped, and proven inert in a
+  Digital Twin: zero records, exit 0, no error. If you add a switch, prove it end to end in a
+  DTU before documenting it.
 - `amplifier-core` is a **peer dependency**. It must not appear in `[project.dependencies]` —
   it is not on PyPI. Put it in `[dependency-groups] dev`.
 - Every `mount()` must register something. A `mount()` that returns `None` and registers

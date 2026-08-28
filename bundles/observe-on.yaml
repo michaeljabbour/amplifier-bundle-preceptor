@@ -1,0 +1,27 @@
+bundle:
+  name: preceptor-observe-on
+  version: 0.1.0
+  description: |
+    Observation, EXPLICITLY ENABLED. Running this bundle is the consent act.
+
+    The observer ships enabled: false everywhere else, so choosing this bundle by name
+    is what turns recording on -- rather than a settings-file stanza that is easy to
+    get subtly wrong and that fails silently when you do.
+
+    Records structure only: tool sequence, a SHA-256 of tool input, success flags, run
+    boundaries. No message text, no file contents, no free-text field. Local, 90-day
+    retention, readable and deletable by you. Read docs/CONSENT.md first.
+
+includes:
+  - bundle: git+https://github.com/microsoft/amplifier-foundation@main
+  - bundle: preceptor:behaviors/preceptor-observer
+
+# Composition override. This is the mechanism that actually works -- verified in a
+# Digital Twin. The ~/.amplifier/settings.yaml form previously documented in the README
+# and docs/CONSENT.md was INERT: it produced no records, no error, and no way to tell
+# which. Do not reintroduce it without re-verifying end to end.
+hooks:
+  - module: hooks-trajectory-observer
+    source: ../modules/hooks-trajectory-observer
+    config:
+      enabled: true

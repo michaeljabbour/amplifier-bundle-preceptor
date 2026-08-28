@@ -62,3 +62,36 @@ For Preceptor, `no-effect` on overhead is the **desired** result: the observer
 claims to sit off the model's path, and this is the check on that claim.
 
 Results land in `bench-results/latest.json` (gitignored — they are machine-specific).
+
+## First run, 2026-08-28 (macOS arm64, claude-opus-5, n=5 per arm)
+
+| Arm | wall-clock | sessions ok | answers ok |
+|---|---|---|---|
+| control (no preceptor) | **30.68s ± 0.54** | 5/5 | 5/5 |
+| observe-on (recording) | **31.21s ± 0.36** | 5/5 | 5/5 |
+
+```
+delta   +0.53s (+1.7%)   d = +1.16   Welch t = 1.84, df = 6.9
+VERDICT inconclusive — d is large but n is too small to confirm
+HARM    none — every session completed, every answer correct, stderr identical
+```
+
+**Read that verdict carefully, because the first version of this harness got it
+wrong.** It gated on Cohen's d alone, saw d = 1.16, and printed `positive`. But
+Welch's t on the same data is 1.84 at df ≈ 6.9 — roughly p ≈ 0.11, nowhere near
+significant. Five samples cannot establish a 1.7% effect.
+
+The benchmark committed the exact error the bundle it measures exists to catch:
+a confident verdict from a test that could not support it. `verdict()` now
+requires both a meaningful effect size *and* significance, and returns
+`inconclusive` when d is large but n is not.
+
+`inconclusive` means **keep looking**, not "no effect." The honest summary is:
+observing costs somewhere between nothing and about half a second per session,
+and it demonstrably breaks nothing. Establishing which end of that range needs
+n ≈ 30 per arm.
+
+**Function check** (separate from timing): the treatment arm wrote 37 observation
+records across the run, and every record carried only the 14 structural fields —
+no message text, no file contents, no paths. The observer is doing real work,
+not merely loading.

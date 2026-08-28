@@ -93,7 +93,9 @@ def run_trial(arm: Arm, task: tuple[str, str, str], home: Path) -> Trial:
     cmd.append(prompt)
 
     # Isolate state so trial N cannot inherit anything from trial N-1.
-    env = {**os.environ, "AMPLIFIER_HOME": str(home)}
+    env = (
+        {**os.environ} if home is None else {**os.environ, "AMPLIFIER_HOME": str(home)}
+    )
 
     t0 = time.monotonic()
     try:
@@ -124,27 +126,50 @@ def verdict(
 ) -> tuple[str, str]:
     """positive | no-effect | inconclusive — never a bare pass/fail.
 
-    `inconclusive` is a real verdict and it is the honest answer to an
-    underpowered comparison. Accepting the null from a test that could never
-    have rejected it is the single most common way this kind of benchmark lies.
+    Requires BOTH a meaningful effect size AND statistical significance. An
+    earlier version of this function gated on Cohen's d alone and reported
+    "positive" for a +1.7% difference that a Welch t-test put at p≈0.11 — a
+    large-looking d on five samples per arm. That is the exact failure this
+    repo's evidence-standards.md warns about, committed by its own benchmark.
+
+    `inconclusive` is a real verdict and it means KEEP LOOKING. It does not
+    mean "no effect": accepting the null from a test that could never have
+    rejected it is how a benchmark lies.
     """
     if len(control) < n_min or len(treat) < n_min:
         return "inconclusive", f"n={min(len(control), len(treat))} < {n_min} per arm"
+
     mc, mt = statistics.mean(control), statistics.mean(treat)
-    sc = statistics.stdev(control) if len(control) > 1 else 0.0
-    st = statistics.stdev(treat) if len(treat) > 1 else 0.0
-    pooled = ((sc**2 + st**2) / 2) ** 0.5
+    sc = statistics.stdev(control)
+    st_ = statistics.stdev(treat)
     delta = mt - mc
-    if pooled == 0:
+    pooled = ((sc**2 + st_**2) / 2) ** 0.5
+    d = delta / pooled if pooled else 0.0
+
+    # Welch's t — unequal variances, which is the safe assumption here.
+    se = (sc**2 / len(control) + st_**2 / len(treat)) ** 0.5
+    if se == 0:
         return (
             ("no-effect", "identical")
             if delta == 0
             else ("positive", f"delta={delta:+.2f}s")
         )
-    d = delta / pooled  # Cohen's d
-    if abs(d) < 0.5:  # below a medium effect: we cannot distinguish it from noise
-        return "no-effect", f"delta={delta:+.2f}s  d={d:+.2f}  (below detectable)"
-    return "positive", f"delta={delta:+.2f}s  d={d:+.2f}"
+    tstat = delta / se
+    df = (sc**2 / len(control) + st_**2 / len(treat)) ** 2 / (
+        (sc**2 / len(control)) ** 2 / (len(control) - 1)
+        + (st_**2 / len(treat)) ** 2 / (len(treat) - 1)
+    )
+    # Two-sided ~p<0.05 for small df. Conservative and dependency-free.
+    crit = 2.45 if df < 8 else (2.31 if df < 10 else 2.09)
+    sig = abs(tstat) >= crit
+    stats = f"delta={delta:+.2f}s ({delta / mc * 100:+.1f}%)  d={d:+.2f}  t={tstat:.2f} df={df:.1f}"
+
+    if sig and abs(d) >= 0.5:
+        return "positive", stats
+    if not sig and abs(d) >= 0.5:
+        # Effect looks real but the sample cannot establish it. Do NOT call this no-effect.
+        return "inconclusive", stats + "  (d is large but n is too small to confirm)"
+    return "no-effect", stats
 
 
 def main() -> int:
@@ -154,6 +179,13 @@ def main() -> int:
     )
     ap.add_argument("--repo-url", default=REPO)
     ap.add_argument("--out", default="bench-results/latest.json")
+    ap.add_argument(
+        "--warm-cache",
+        action="store_true",
+        help="reuse the caller's bundle cache (much faster; sessions are isolated anyway)",
+    )
+    ap.add_argument("--tasks", type=int, default=0, help="limit to first N tasks")
+    ap.add_argument("--skip-observe-off", action="store_true")
     args = ap.parse_args()
 
     arms = [
@@ -162,7 +194,10 @@ def main() -> int:
         Arm("observe-on", f"{args.repo_url}#subdirectory=bundles/observe-on.yaml"),
     ]
 
-    total = len(arms) * len(TASKS) * args.trials
+    if args.skip_observe_off:
+        arms = [a for a in arms if a.name != "observe-off"]
+    tasks = TASKS[: args.tasks] if args.tasks else TASKS
+    total = len(arms) * len(tasks) * args.trials
     print(
         f"preceptor bench — {len(arms)} arms x {len(TASKS)} tasks x {args.trials} trials "
         f"= {total} runs\n"

@@ -39,6 +39,9 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from verdict import compare
+
 REPO = "git+https://github.com/michaeljabbour/amplifier-bundle-preceptor@main"
 
 # Deterministic, cheap, and verifiable without a grader model. A rubric that
@@ -121,57 +124,6 @@ def run_trial(arm: Arm, task: tuple[str, str, str], home: Path) -> Trial:
     )
 
 
-def verdict(
-    control: list[float], treat: list[float], n_min: int = 5
-) -> tuple[str, str]:
-    """positive | no-effect | inconclusive — never a bare pass/fail.
-
-    Requires BOTH a meaningful effect size AND statistical significance. An
-    earlier version of this function gated on Cohen's d alone and reported
-    "positive" for a +1.7% difference that a Welch t-test put at p≈0.11 — a
-    large-looking d on five samples per arm. That is the exact failure this
-    repo's evidence-standards.md warns about, committed by its own benchmark.
-
-    `inconclusive` is a real verdict and it means KEEP LOOKING. It does not
-    mean "no effect": accepting the null from a test that could never have
-    rejected it is how a benchmark lies.
-    """
-    if len(control) < n_min or len(treat) < n_min:
-        return "inconclusive", f"n={min(len(control), len(treat))} < {n_min} per arm"
-
-    mc, mt = statistics.mean(control), statistics.mean(treat)
-    sc = statistics.stdev(control)
-    st_ = statistics.stdev(treat)
-    delta = mt - mc
-    pooled = ((sc**2 + st_**2) / 2) ** 0.5
-    d = delta / pooled if pooled else 0.0
-
-    # Welch's t — unequal variances, which is the safe assumption here.
-    se = (sc**2 / len(control) + st_**2 / len(treat)) ** 0.5
-    if se == 0:
-        return (
-            ("no-effect", "identical")
-            if delta == 0
-            else ("positive", f"delta={delta:+.2f}s")
-        )
-    tstat = delta / se
-    df = (sc**2 / len(control) + st_**2 / len(treat)) ** 2 / (
-        (sc**2 / len(control)) ** 2 / (len(control) - 1)
-        + (st_**2 / len(treat)) ** 2 / (len(treat) - 1)
-    )
-    # Two-sided ~p<0.05 for small df. Conservative and dependency-free.
-    crit = 2.45 if df < 8 else (2.31 if df < 10 else 2.09)
-    sig = abs(tstat) >= crit
-    stats = f"delta={delta:+.2f}s ({delta / mc * 100:+.1f}%)  d={d:+.2f}  t={tstat:.2f} df={df:.1f}"
-
-    if sig and abs(d) >= 0.5:
-        return "positive", stats
-    if not sig and abs(d) >= 0.5:
-        # Effect looks real but the sample cannot establish it. Do NOT call this no-effect.
-        return "inconclusive", stats + "  (d is large but n is too small to confirm)"
-    return "no-effect", stats
-
-
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -252,9 +204,9 @@ def main() -> int:
     print("\n" + "-" * 72)
     print("OVERHEAD vs control  (does Preceptor cost you time?)")
     for arm in arms[1:]:
-        v, why = verdict(base, [t.seconds for t in arm.trials])
-        summary["verdicts"][arm.name] = {"verdict": v, "detail": why}
-        print(f"  {arm.name:<12} {v:<13} {why}")
+        r = compare(base, [t.seconds for t in arm.trials])
+        summary["verdicts"][arm.name] = {"verdict": r.verdict, "detail": r.detail}
+        print(f"  {arm.name:<12} {r.verdict:<13} {r.detail}")
 
     print("\nHARM  (does it break or change anything?)")
     harmed = False

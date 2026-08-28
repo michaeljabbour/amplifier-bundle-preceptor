@@ -1,0 +1,12 @@
+# ARM: preceptor-off
+# Preceptor composed, recording and dosing OFF. Isolates the cost of merely loading the bundle.
+#
+# This file is the ONLY thing that differs between arms. Task, model, DTU
+# profile, and timeout are held fixed by the harness. If you change anything
+# else here, the comparison is no longer controlled.
+requires:
+  env: [ANTHROPIC_API_KEY]
+setup_cmds:
+  - uv tool install -vv git+https://github.com/microsoft/amplifier
+  - amplifier bundle add git+https://github.com/microsoft/amplifier-foundation@main --app
+  - amplifier bundle add 'git+https://github.com/michaeljabbour/amplifier-bundle-preceptor@main#subdirectory=bundles/observe-only.yaml' --app

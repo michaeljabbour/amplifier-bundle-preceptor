@@ -1,0 +1,12 @@
+# ARM: baseline
+# Control. Foundation only, no instruction layer under test.
+#
+# This file is the ONLY thing that differs between arms. Task, model, DTU
+# profile, and timeout are held fixed by the harness. If you change anything
+# else here, the comparison is no longer controlled.
+requires:
+  env: [ANTHROPIC_API_KEY]
+setup_cmds:
+  - uv tool install -vv git+https://github.com/microsoft/amplifier
+  - amplifier bundle add git+https://github.com/microsoft/amplifier-foundation@main --app
+

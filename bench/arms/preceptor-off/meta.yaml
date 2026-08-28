@@ -1,0 +1,3 @@
+name: preceptor-off
+description: |
+  Preceptor composed, recording and dosing OFF. Isolates the cost of merely loading the bundle.

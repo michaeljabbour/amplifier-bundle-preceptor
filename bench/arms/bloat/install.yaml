@@ -1,0 +1,13 @@
+# ARM: bloat
+# N plausible but unearned instructions added. Tests the thesis in the direction arXiv:2601.20404 says it may fail.
+#
+# This file is the ONLY thing that differs between arms. Task, model, DTU
+# profile, and timeout are held fixed by the harness. If you change anything
+# else here, the comparison is no longer controlled.
+requires:
+  env: [ANTHROPIC_API_KEY]
+setup_cmds:
+  - uv tool install -vv git+https://github.com/microsoft/amplifier
+  - amplifier bundle add git+https://github.com/microsoft/amplifier-foundation@main --app
+  - amplifier bundle add 'git+https://github.com/michaeljabbour/amplifier-bundle-preceptor@main' --app
+  # Bloat instruction set staged at seed time.

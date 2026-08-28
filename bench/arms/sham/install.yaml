@@ -1,0 +1,13 @@
+# ARM: sham
+# Cues earned on a DIFFERENT model and domain, matched on count and length. If this ties preceptor-on, 'earned' means nothing.
+#
+# This file is the ONLY thing that differs between arms. Task, model, DTU
+# profile, and timeout are held fixed by the harness. If you change anything
+# else here, the comparison is no longer controlled.
+requires:
+  env: [ANTHROPIC_API_KEY]
+setup_cmds:
+  - uv tool install -vv git+https://github.com/microsoft/amplifier
+  - amplifier bundle add git+https://github.com/microsoft/amplifier-foundation@main --app
+  - amplifier bundle add 'git+https://github.com/michaeljabbour/amplifier-bundle-preceptor@main' --app
+  # Ledger is swapped for the sham set at seed time by the harness, not here.

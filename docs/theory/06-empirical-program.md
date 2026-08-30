@@ -369,3 +369,77 @@ to publish the answer when it comes back negative.
 The autonomy lock, the shadow window, the `inconclusive` verdict, the refusal to print a
 benefit number with no earned cues: all of that is the same discipline. This document is
 that discipline applied to the thesis itself.
+
+---
+
+## 11. Infrastructure resolved, and a bug the reality check found
+
+*Appended 2026-08-29, after resizing the VM and running the harness for real.*
+
+### 11.1 The capacity constraint is gone
+
+The Colima VM was resized **4 CPU / 8 GiB / 60 GiB → 12 CPU / 64 GiB / 200 GiB**.
+
+All 18 Incus containers survived and every previously-running one came back
+RUNNING on its own. The VM spec and the container data disk are independent —
+`~/.colima/_lima/colima-resolve/diffdisk` is untouched by a CPU/memory change,
+and a disk grow is additive. A restore plan is at `~/.amplifier/dtu-restore/`.
+
+Measured after the resize, versus what §7 estimated on 4 cores:
+
+| Operation | Estimated (4 cpu) | **Measured (12 cpu)** |
+|---|---|---|
+| Bare container launch | — | **2.1 s** |
+| 8 concurrent launches | — | **4.5 s** wall, load 2.11 / 12 |
+| Full Amplifier provision | 90–180 s | **19–26 s** |
+| Practical concurrency | 2–4 | **8+**, with headroom |
+
+The earlier "practical concurrency 2–4, not 50" finding was correct *for the VM
+as configured* and is now obsolete. n=30 per arm is affordable.
+
+**No golden image, deliberately.** `incus publish` would bake
+`ANTHROPIC_API_KEY` into the image — the profile writes it to
+`/root/.amplifier/settings.yaml` and passthrough writes it to
+`/etc/profile.d/dtu-env.sh`, and both are captured. At 19 s, provisioning is
+cheap enough that avoiding a secret-bearing image is the better trade.
+
+### 11.2 The observer does not record through bundle config
+
+**`bundles/observe-on.yaml` is inert.** It composes the bundle and records
+nothing. Isolated to the config plumbing, not the module:
+
+```
+mount(config={"enabled": True, "root": ..., "flush_every": 1})
+    -> 13 handlers registered, JSONL file written        MODULE IS CORRECT
+
+mount(config={})
+    -> 0 handlers registered, no directory created       WHAT IT ACTUALLY GETS
+```
+
+Through a bundle YAML — tried as a **root `hooks:` block** and as a **behavior
+`hooks:` block**, with an **absolute module source** and `enabled: true` — the
+result is 0 records and the output directory is never created. The directory not
+existing is the tell: `mount()` checks `enabled` before it reads `root`, so an
+absent directory means it returned at the consent gate, which means `enabled`
+arrived falsy, which means the `config:` block did not reach the module.
+
+The module is confirmed present in the composed mount plan
+(`amplifier bundle show` lists `hooks-trajectory-observer` among 15 hooks) and
+confirmed importable inside the container. It mounts. It is handed nothing.
+
+**Consequences, stated plainly:**
+
+1. The consent gate fails **closed**, which is the right direction to fail. No
+   user has been recorded without meaning to be.
+2. **`observe-on` and `observe-off` are currently the same arm.** Any overhead
+   comparison between them measures bundle-load cost and nothing else. The cost
+   of *recording* is unmeasured and must not be reported as measured.
+3. Yesterday's reality check reported records appearing under a "bundle
+   composition override." Either that path differs from both forms tried here,
+   or the observation was of a differently-constructed override. Unresolved.
+
+This is the second silent failure in this bundle's consent path — after the
+`settings.yaml` stanza that was documented, shipped, and inert. Both failed the
+same way: no error, no records, and no way for a user to tell which. The pattern
+is now clear enough to state as a rule: **a switch in this bundle is not shipped
+until a Digital Twin has proven it end to end**, and that rule is in `AGENTS.md`.

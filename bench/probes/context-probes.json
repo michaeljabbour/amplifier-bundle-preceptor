@@ -45,8 +45,9 @@
     {
       "id": "removal-burden",
       "question": "In this bundle, is it easier to add an instruction or to remove one, and why? One sentence.",
-      "expect": "(?i)(remov\\w+|delet\\w+).{0,80}(burden|proof|evidence|harder|stricter)|(burden|proof|evidence).{0,80}remov",
-      "why": "The rule that governs the whole bundle. Losing it changes behavior, not just knowledge."
+      "expect": "(?i)(add\\w*|addition)\\s+(is\\s+)?easier|(remov\\w+|delet\\w+).{0,90}(burden|proof|evidence|harder|stricter|risk)|(burden|proof|evidence).{0,90}remov",
+      "why": "The governing rule. NOTE: the model answers this correctly with NO preceptor context at all (verified, 3/3) -- the conclusion is over-determined by any additive context system. So this probe measures whether the conclusion is reachable, NOT whether these tokens caused it. Attribution needs the no-context arm, which is why it now exists.",
+      "over_determined": true
     },
     {
       "id": "cue-conflict",

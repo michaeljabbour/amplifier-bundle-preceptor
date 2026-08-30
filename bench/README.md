@@ -457,18 +457,55 @@ Have: 20. **The design cannot rule out even a 10pp regression.** The verdict is
 the instrument reporting its own limit — which is exactly why the rule refuses to
 read a non-significant difference as evidence of safety.
 
-### Finding 3 — 180 tokens/request that land nowhere
+### Finding 3 — RETRACTED, and replaced by something worse
 
-`removal-burden` scores **0/5 in all four arms**. The probe asks the question the
-context exists to enable: *is it easier to add an instruction or remove one, and
-why?* The answer is stated verbatim in `cue-awareness.md` — "Removal carries the
-burden of proof; addition does not" — and the agent never produces it.
+**What I published:** *"`removal-burden` scores 0/5 in all four arms... roughly 180
+tokens per request state this bundle's governing rule and it does not survive into
+behavior."*
 
-The instrument is not at fault: `see-records`, `delete-records` and
-`what-recorded` score 5/5 on strings that appear **only** in these files, so the
-context demonstrably reaches the model.
+**That claim was false, and I never checked it before publishing.** I reported a
+0/5 score without once reading what the model actually said. Here is a response:
 
-So roughly 180 tokens per request, on every request, for the life of every
-session, state this bundle's governing rule — and it does not survive into
-behavior. That is precisely the failure Preceptor was built to detect, sitting
-inside Preceptor, found by Preceptor's own apparatus.
+> *"Adding is easier: one more directive just stacks onto an already-additive,
+> delegation-heavy context stack, whereas removing one requires tracing every
+> cross-referencing file to make sure nothing else still depends on it."*
+
+That is a correct answer to the probe. It scored 0 because my regex offered
+`harder|stricter` and never `easier` — and "Adding is easier" is how the model
+phrases it, 6 times out of 6. **One missing alternation, four runs, a published
+finding.** Exactly the failure mode this file already documents twice, committed a
+third time by the person documenting it.
+
+**The decisive test I should have run first.** Ask the same question with
+foundation only — no Preceptor context anywhere:
+
+> *"It's easier to add an instruction, because this bundle is built from
+> independently-loaded, additive context files... whereas removing one would
+> require finding and altering whichever specific source file injected it."*
+
+Three for three. **The model gives the same correct answer with none of the
+context present.**
+
+**So the real finding is worse than the false one.** Those ~180 tokens are not
+failing to land — they are landing on a conclusion the model reaches without
+them. The conclusion is *over-determined*: any additive context system implies
+that removal is harder than addition, and the model reads that off the structure
+it can already see.
+
+Note what does *not* transfer. The bundle's argument is epistemic — a removed-but-
+correct cue causes a failure later with nothing to attribute it to. The model's
+argument is mechanical — dependency tracing, broken references. It reaches the
+right conclusion by a different route, so the specific reasoning those tokens
+encode is not what is doing the work.
+
+> **A probe cannot attribute an effect without a no-instruction arm.** Measuring
+> only full-vs-reduced answers "did the reduction preserve it," never "did these
+> tokens cause it." An instruction whose conclusion is over-determined passes
+> every preservation test ever run against it while contributing nothing — and
+> that is precisely the instruction this bundle exists to find.
+
+This is the first genuine instance of Preceptor's own thesis holding, and the
+apparatus found it inside Preceptor. The probe set now carries an
+`over_determined` flag and a no-context arm, because without one the whole method
+measures preservation and calls it attribution.
+

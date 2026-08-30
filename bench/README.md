@@ -63,6 +63,49 @@ claims to sit off the model's path, and this is the check on that claim.
 
 Results land in `bench-results/latest.json` (gitignored — they are machine-specific).
 
+## Second run, 2026-08-29 — DTU, n=30 per arm (POWERED)
+
+90 isolated containers, one per trial, destroyed after. 12.9 min wall at 8-way
+concurrency on the resized VM.
+
+| Arm | run time | launched | exit ok | correct |
+|---|---|---|---|---|
+| baseline | **37.95s ± 1.86** | 30/30 | 30/30 | 30/30 |
+| observe-off | **37.65s ± 2.03** | 30/30 | 30/30 | 30/30 |
+| observe-on | **37.83s ± 2.32** | 30/30 | 30/30 | 30/30 |
+
+```
+OVERHEAD vs baseline
+  observe-off   no-effect   delta=-0.300 (-0.8%)  d=-0.15  t=-0.60 df=57.6
+  observe-on    no-effect   delta=-0.125 (-0.3%)  d=-0.06  t=-0.23 df=55.4
+
+HARM      none — 90/90 trials completed with the correct answer
+POWER     n=30 usable. Need ~25 for d=0.8. Bar met.
+```
+
+**This supersedes the n=5 run below.** That one could only say `inconclusive`.
+This one is adequately powered for a large effect and returns a real
+`no-effect`: composing the Preceptor bundle costs nothing measurable, and both
+deltas are *negative* (nominally faster), which is what noise looks like.
+
+**What this does NOT measure — and the reason is a bug.** `observe-on` wrote
+**0 observation records**. The observer's `config:` block is not reaching its
+`mount()` through bundle YAML, so the consent gate reads `enabled=False` and it
+registers no handlers. `observe-on` and `observe-off` are therefore *the same
+arm*, and the cost of actually **recording** is unmeasured. See
+[`docs/theory/06-empirical-program.md`](../docs/theory/06-empirical-program.md)
+§11.2 for the isolation:
+
+```
+mount(config={"enabled": True, ...})  -> 13 handlers, file written   module OK
+mount(config={})                      ->  0 handlers, nothing        what it gets
+```
+
+The gate fails **closed**, which is the right direction — nobody has been
+recorded who didn't ask to be.
+
+---
+
 ## First run, 2026-08-28 (macOS arm64, claude-opus-5, n=5 per arm)
 
 | Arm | wall-clock | sessions ok | answers ok |

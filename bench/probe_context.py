@@ -47,6 +47,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+
 HERE = Path(__file__).parent
 PROBES = json.loads((HERE / "probes" / "context-probes.json").read_text())["probes"]
 BUNDLE = (

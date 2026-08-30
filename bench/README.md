@@ -396,3 +396,79 @@ Unknown level: '${AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL:INFO}'
 An unexpanded environment-variable placeholder reaching a logging-level parser.
 Invisible in normal use because `session_runner.py:427` mutes the `amplifier_core`
 logger to CRITICAL unless `--verbose`.
+
+---
+
+## Context ablation — and a gate that was measuring noise
+
+`bench/probe_context.py` ablates the always-on context files and measures what
+breaks. The bundle's own rule forbids the alternative: *"Never propose removing a
+cue, a context file, or an instruction on judgment alone."*
+
+Probes are regex-graded (no LLM judge). Both arms run in one container and differ
+only in the bytes of the context files. A probe counts only if the **full**
+context passes it — a probe the full context already fails measures a gap, not a
+loss.
+
+### Results, n=5 reps per probe
+
+| probe | v1 full | v1 reduced | v2 full | v2 reduced |
+|---|---|---|---|---|
+| stop-recording | 3/5 | 5/5 | 2/5 | 4/5 |
+| what-recorded | 5/5 | 5/5 | 5/5 | 5/5 |
+| see-records | 5/5 | 5/5 | 5/5 | 5/5 |
+| delete-records | 5/5 | 5/5 | 5/5 | **4/5** |
+| **removal-burden** | **0/5** | **0/5** | **0/5** | **0/5** |
+| cue-conflict | 5/5 | **4/5** | 5/5 | 5/5 |
+
+### Finding 1 — the gate was measuring noise, and I built it
+
+The first accept rule required every rep of every admissible probe to pass. That
+gate is unsound, and provably so **without reference to any outcome**: at a
+per-rep pass rate of 0.95 with 4 probes × 5 reps, a *perfect* reduction survives
+with probability `0.95²⁰ = 0.358`. It is rejected **64% of the time**.
+
+The empirical confirmation is in the table. `awareness.md` is **byte-identical
+between v1 and v2** — only `cue-awareness.md` was edited. Yet `delete-records`
+scored 5/5 then 4/5, and in the *untouched* full arm `stop-recording` scored 3/5
+then 2/5. **Same bytes, different verdict.**
+
+This is the same class of error as commit `dd34bcb`: the repo built the correct
+asymmetric non-inferiority rule in `climb.py`, then this file wrote a *second*,
+cruder rule that violated it. `probe_context.py` now calls `climb.decide()` —
+one accept rule, not two.
+
+### Finding 2 — under the corrected rule, still REJECT, but honestly
+
+```
+v1  full 20/20 (1.00)   reduced 19/20 (0.95)   saved ~181 tok
+v2  full 20/20 (1.00)   reduced 19/20 (0.95)   saved ~124 tok
+
+REJECTED — non-inferiority FAILED: upper bound on loss +0.1323 >= margin 0.1000.
+Not proof of harm — proof that harm this large cannot be ruled out at n=20.
+```
+
+| to rule out | reps per arm |
+|---|---|
+| a 10pp regression | ~31 |
+| a 5pp regression | ~121 |
+
+Have: 20. **The design cannot rule out even a 10pp regression.** The verdict is
+the instrument reporting its own limit — which is exactly why the rule refuses to
+read a non-significant difference as evidence of safety.
+
+### Finding 3 — 180 tokens/request that land nowhere
+
+`removal-burden` scores **0/5 in all four arms**. The probe asks the question the
+context exists to enable: *is it easier to add an instruction or remove one, and
+why?* The answer is stated verbatim in `cue-awareness.md` — "Removal carries the
+burden of proof; addition does not" — and the agent never produces it.
+
+The instrument is not at fault: `see-records`, `delete-records` and
+`what-recorded` score 5/5 on strings that appear **only** in these files, so the
+context demonstrably reaches the model.
+
+So roughly 180 tokens per request, on every request, for the life of every
+session, state this bundle's governing rule — and it does not survive into
+behavior. That is precisely the failure Preceptor was built to detect, sitting
+inside Preceptor, found by Preceptor's own apparatus.

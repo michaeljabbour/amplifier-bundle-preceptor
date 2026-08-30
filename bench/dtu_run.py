@@ -173,7 +173,7 @@ def run_trial(arm: str, task: tuple[str, str, str], idx: int) -> Trial:
                 "--",
                 "bash",
                 "-lc",
-                f"amplifier run --output-format json {json.dumps(prompt)}",
+                f"{env_prefix}amplifier run --output-format json {json.dumps(prompt)}",
             ],
             timeout=900,
         )

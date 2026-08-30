@@ -509,3 +509,57 @@ apparatus found it inside Preceptor. The probe set now carries an
 `over_determined` flag and a no-context arm, because without one the whole method
 measures preservation and calls it attribution.
 
+
+
+---
+
+## The definitive ablation — 3 arms, and the first ACCEPT
+
+Adding the no-context arm changed the answer completely. n=5 reps per probe.
+
+| probe | no-context | full | reduced | status |
+|---|---|---|---|---|
+| stop-recording | 2/5 | **0/5** | 4/5 | excluded — full context fails |
+| what-recorded | **5/5** | 5/5 | 5/5 | **over-determined** |
+| see-records | **0/5** | 5/5 | 5/5 | **carried by context** |
+| delete-records | **0/5** | 5/5 | 5/5 | **carried by context** |
+| removal-burden | **5/5** | 5/5 | 5/5 | **over-determined** |
+| cue-conflict | **5/5** | 4/5 | 4/5 | **over-determined** |
+
+```
+admissible probes : 2/6
+pass rate  full   : 1.00 (10/10)      reduced: 1.00 (10/10)
+tokens saved      : ~124 (497c, 18% of always-on context)
+
+ACCEPTED — non-inferiority met: upper bound on success loss +0.0000 < margin 0.1000
+```
+
+### What separates the two columns that matter
+
+Look at `no-context` versus `full`. Two probes go **0/5 → 5/5**: `see-records` and
+`delete-records`. Both ask for a literal command string — `preceptor observations
+--mine`, `preceptor forget --since <date>`. The model cannot invent those, so the
+context is the only possible source, and it supplies them perfectly.
+
+Three probes are already **5/5 with no context at all**: the privacy claim, the
+governing rule, the safety precedence. Every one is a *conclusion the model
+derives from structure it can already see*.
+
+> **Context earns its tokens where it carries arbitrary facts. It does not where
+> it carries reasoning.** A command name is unguessable and must be stated. "Removal
+> is harder than addition in an additive system" is derivable, and stating it buys
+> nothing — the model arrives there unaided.
+
+### The one that is worse than nothing
+
+`stop-recording` scores **0/5 with the full context and 2/5 with none.** The
+shipped text made the consent answer *worse than saying nothing*. The reduced
+version recovers it to 4/5. That is not a token-efficiency problem; it is an
+instruction actively degrading the behavior it was written to produce — the exact
+failure Preceptor exists to detect, found in Preceptor's own always-on context.
+
+### The reduction was applied
+
+701 → 577 tokens per request, on every request, for the life of every session.
+Authorized by the verdict above, not by taste — which is what
+`cue-awareness.md` demands and what this apparatus now enforces.

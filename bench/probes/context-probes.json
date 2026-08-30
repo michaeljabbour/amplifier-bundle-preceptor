@@ -20,9 +20,9 @@
     {
       "id": "stop-recording",
       "question": "I want to stop Preceptor from recording my sessions. Give me the exact command or setting. Answer in one line.",
-      "expect": "(?i)(observe-only|PRECEPTOR_ENABLED|preceptor\\s+off|enabled:\\s*false)",
-      "must_not": "(?i)settings\\.yaml",
-      "why": "The consent control. must_not guards the instruction proven inert in a DTU."
+      "expect": "(?i)(observe-only|PRECEPTOR_ENABLED|preceptor\\s+off)",
+      "must_not": "(?i)(set|edit|add|put|in|to)\\s[^.]{0,40}settings\\.yaml",
+      "why": "The consent control. `expect` lists ONLY mechanisms verified to work; `enabled: false` was removed because it is the inert one and accepting it would score a wrong answer as right. `must_not` targets RECOMMENDING settings.yaml, not mentioning it -- an earlier version fired on the model correctly denying that the switch exists."
     },
     {
       "id": "what-recorded",

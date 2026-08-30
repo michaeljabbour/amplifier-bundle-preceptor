@@ -45,6 +45,11 @@ ARM_BUNDLE_NAMES: dict[str, str] = {
 
 ARMS: dict[str, str | None] = {
     "baseline": None,
+    # Same --bundle mechanism as the treatment arms, near-zero payload. If this
+    # lands on baseline, the flag is free and any gap above it is real bundle
+    # cost. If it lands on the treatment arms, the flag IS the cost and
+    # "preceptor costs +138%" was the third artifact in a row.
+    "url-control": "git+https://github.com/microsoft/amplifier-foundation@main",
     "observe-off": f"{REPO}#subdirectory=bundles/observe-only.yaml",
     "observe-on": f"{REPO}#subdirectory=bundles/observe-on.yaml",
 }

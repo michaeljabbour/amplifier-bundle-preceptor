@@ -337,3 +337,62 @@ needs earned cues, and none exist. `correction_turns.py` is wired and tested and
 waiting; manufacturing cues to give the climber something to chew on would be
 authoring a result from priors, which is the exact failure this bundle exists to
 catch.
+
+---
+
+## Direct phase timing — the measurement that finally works
+
+`bench/phase_timing.py` times `load_bundle` → `prepare` → `create_session`
+in-process, with **no LLM anywhere in the path**. n=20 per bundle, run inside a
+DTU container.
+
+| bundle | load | prepare | mount | **total** |
+|---|---|---|---|---|
+| foundation | 0.042 ± 0.002 | 0.006 ± 0.000 | 0.117 ± 0.011 | **0.166s** |
+| observe-off | 0.043 ± 0.001 | 0.007 ± 0.000 | 0.120 ± 0.011 | **0.170s** |
+| observe-on | 0.044 ± 0.001 | 0.007 ± 0.000 | 0.126 ± 0.017 | **0.177s** |
+
+```
+PRECEPTOR'S MARGINAL COST vs foundation
+  observe-off   total  no-effect  delta=+0.004s (+2.7%)  d=+0.38
+  observe-on    total  positive   delta=+0.011s (+6.4%)  d=+0.72  t=2.29
+```
+
+**Composing Preceptor costs 4–11 milliseconds.** Not 6.9 seconds. The wall-clock
+proxy was wrong by a factor of roughly 600.
+
+### Three artifacts, one root cause
+
+| # | Artifact | Fabricated result | Statistics behind it |
+|---|---|---|---|
+| 1 | Cold git resolution counted as bundle cost | +74% regression | d=7.37, t=28.5 |
+| 2 | Warming only treatment arms | 3.5× speedup | — |
+| 3 | `--bundle <url>` flag cost counted as bundle cost | +138% regression | d=6.26, t=24.3 |
+
+Every one had overwhelming statistics. **The failure was never statistical — it
+was measuring a proxy containing a larger, arm-correlated term than the thing
+being measured.** More power would have made each artifact *more* confident, not
+less. The fix was not a bigger n; it was measuring the quantity directly.
+
+Artifact #3 was caught by a control that costs nothing to add and should have
+been there from the start: an arm that exercises **the same mechanism with a
+trivial payload**. `url-control` (foundation alone, via `--bundle <git-url>`)
+landed at 15.14s — *slower* than both Preceptor arms. And the tell that the proxy
+was exhausted: Preceptor's marginal cost came out **−3.91s**, and a bundle that
+*includes* foundation cannot load faster than foundation.
+
+> A negative value for a quantity that is physically non-negative is not a
+> surprising result. It is the instrument reporting that it is out of range.
+
+### An unrelated bug this surfaced
+
+`hook-context-intelligence` fails module validation on every session:
+
+```
+protocol_compliance: Error during protocol compliance check:
+Unknown level: '${AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL:INFO}'
+```
+
+An unexpanded environment-variable placeholder reaching a logging-level parser.
+Invisible in normal use because `session_runner.py:427` mutes the `amplifier_core`
+logger to CRITICAL unless `--verbose`.

@@ -1,0 +1,41 @@
+bundle:
+  name: preceptor-observer-on-behavior
+  version: 0.1.0
+  description: |
+    The observer with recording ENABLED. Composing this behavior is the consent act.
+
+    This is a SIBLING of preceptor-observer.yaml, not an override of it. That
+    distinction is load-bearing and was learned the hard way.
+
+    An earlier design had bundles/observe-on.yaml include preceptor-observer.yaml
+    (enabled: false) and then re-declare the hook at root level with
+    enabled: true. It recorded nothing, silently. Instrumenting mount() showed
+    exactly why -- the config that arrived was the INCLUDED behavior's, entire:
+
+      config={'enabled': False, 'flush_every': 25,
+              'root': '~/.amplifier/projects/{project}/preceptor',
+              'retention_days': 90, 'priority': 200,
+              'record_payload_shapes': True}
+
+    Not a merge of the two. Not the root's values. The include's, all six keys.
+    When the same module is declared twice in one composition, the config does
+    not deep-merge with later-wins -- so an "override" that re-declares a module
+    already declared by an include is not an override at all.
+
+    Hence: exactly ONE declaration of hooks-trajectory-observer per composition.
+    A bundle includes either preceptor-observer (off) or this one (on), never both.
+
+hooks:
+  - module: hooks-trajectory-observer
+    source: ../modules/hooks-trajectory-observer
+    config:
+      enabled: true
+      root: ~/.amplifier/projects/{project}/preceptor
+      flush_every: 25
+      retention_days: 90
+      priority: 200
+      record_payload_shapes: true
+
+context:
+  include:
+    - preceptor:context/awareness.md

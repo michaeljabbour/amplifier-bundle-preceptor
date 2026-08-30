@@ -48,6 +48,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+from climb import Measurement, Mutation, decide
 
 HERE = Path(__file__).parent
 PROBES = json.loads((HERE / "probes" / "context-probes.json").read_text())["probes"]
@@ -162,48 +163,102 @@ def main() -> int:
         f"~{sum(len(v) for v in reduced.values()) // 4} tok"
     )
 
+    # The attribution arm. Empty context files = the bundle composes, mounts, and
+    # injects nothing. Anything still answered here was never being carried by
+    # these tokens.
+    a_none = run_arm(args.container, "no-context", dict.fromkeys(full, ""), args.reps)
     a_full = run_arm(args.container, "full", full, args.reps)
     a_red = run_arm(args.container, "reduced", reduced, args.reps)
 
     print("\n" + "=" * 70)
     print("VERDICT")
     print("=" * 70)
-    admissible = [p for p in PROBES if all(a_full["results"][p["id"]])]
-    inadmissible = [p["id"] for p in PROBES if p not in admissible]
+    passes_full = [p for p in PROBES if all(a_full["results"][p["id"]])]
+    # Over-determined: the no-context arm answers it too, so these tokens are not
+    # what produce the behavior. Verified for `removal-burden`: 3/3 with no
+    # Preceptor context present at all.
+    over = [p for p in passes_full if any(a_none["results"][p["id"]])]
+    admissible = [p for p in passes_full if p not in over]
+    inadmissible = [p["id"] for p in PROBES if p not in passes_full]
     if inadmissible:
         print(
             f"  EXCLUDED (full context already fails these): {', '.join(inadmissible)}"
         )
         print("  A probe the full context fails measures a gap, not a loss.")
+    if over:
+        print(
+            f"  OVER-DETERMINED (no-context arm passes): "
+            f"{', '.join(p['id'] for p in over)}"
+        )
+        print("    The model answers these WITHOUT the context. Those tokens are not")
+        print("    carrying the behavior -- preserving them proves nothing, and they")
+        print("    are the prime removal candidates.")
 
-    lost = [p["id"] for p in admissible if not all(a_red["results"][p["id"]])]
     saved = a_full["chars"] - a_red["chars"]
 
+    # THE ACCEPT RULE: pooled non-inferiority via climb.decide() -- the same
+    # asymmetric rule the calibration loop uses for a REMOVE move.
+    #
+    # The previous rule required EVERY rep of EVERY admissible probe to pass. That
+    # is unsound and provably so without reference to any outcome: at a per-rep
+    # pass rate of 0.95 with 4 probes x 5 reps, a PERFECT reduction survives with
+    # probability 0.95^20 = 0.358 -- rejected 64% of the time. Two runs confirmed
+    # it: awareness.md was byte-identical across both, yet delete-records scored
+    # 5/5 then 4/5 and stop-recording 3/5 then 2/5 in the untouched full arm.
+    # Same bytes, different verdict. That gate measured run-to-run noise.
+    full_reps: list[float] = []
+    red_reps: list[float] = []
+    for probe in admissible:
+        full_reps += [1.0 if x else 0.0 for x in a_full["results"][probe["id"]]]
+        red_reps += [1.0 if x else 0.0 for x in a_red["results"][probe["id"]]]
+
+    lost = [
+        p["id"]
+        for p in admissible
+        if sum(a_red["results"][p["id"]]) < sum(a_full["results"][p["id"]])
+    ]
+
     print(f"\n  admissible probes : {len(admissible)}/{len(PROBES)}")
-    print(f"  preserved         : {len(admissible) - len(lost)}/{len(admissible)}")
+    if full_reps:
+        print(
+            f"  pass rate  full   : {sum(full_reps) / len(full_reps):.2f}"
+            f"  ({int(sum(full_reps))}/{len(full_reps)} reps)"
+        )
+        print(
+            f"  pass rate  reduced: {sum(red_reps) / len(red_reps):.2f}"
+            f"  ({int(sum(red_reps))}/{len(red_reps)} reps)"
+        )
     print(
         f"  tokens saved      : ~{saved // 4} ({saved}c, "
         f"{100 * saved / a_full['chars']:.0f}% of always-on context)"
     )
 
-    accept = not lost and admissible
-    if lost:
-        print(f"\n  LOST: {', '.join(lost)}")
-        print(
-            "  REJECT -- the reduction removed something the full context provably enabled."
-        )
-    elif not admissible:
+    if not admissible:
+        accept = False
         print("\n  REJECT -- no admissible probes; the ablation proves nothing.")
     else:
-        print(
-            f"\n  ACCEPT -- every admissible probe survived, ~{saved // 4} tokens/request saved."
+        d = decide(
+            Mutation(
+                "REMOVE",
+                tuple(p["id"] for p in admissible),
+                strategy_tag="context-reduction",
+            ),
+            Measurement(corrections=[0.0] * len(full_reps), success=full_reps),
+            Measurement(corrections=[0.0] * len(red_reps), success=red_reps),
+            ni_margin=0.10,
         )
+        accept = d.outcome == "accepted"
+        print(f"\n  {d.outcome.upper()} -- {d.reason}")
+        if lost:
+            print(f"  (scored lower, not necessarily significantly: {', '.join(lost)})")
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(
         json.dumps(
             {
+                "no_context": a_none,
+                "over_determined": [p["id"] for p in over],
                 "full": a_full,
                 "reduced": a_red,
                 "admissible": [p["id"] for p in admissible],

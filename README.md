@@ -2,29 +2,67 @@
 
 # Preceptor
 
-**Every context system has an ADD mechanism. Almost none has a REMOVE mechanism.**
+**Every context system can ADD instructions. Almost none can REMOVE them.**
 
-*So context accretes until a human notices and performs surgery.*
-*Preceptor is the missing half: removal, standing and evidence-gated.*
+*So nobody knows which instructions in your system prompt are still doing anything.*
+*Preceptor is the instrument that measures it.*
 
-`amplifier-core` + `amplifier-foundation` only · no sibling bundles · 54 tests
+`amplifier-core` + `amplifier-foundation` only · no sibling bundles · 71 tests
 
 </div>
 
 ---
 
-## The evidence this is real
+## An open question, not a settled one
 
-Anthropic removed **over 80% of the Claude Code system prompt** for Claude 5 generation
-models and measured no loss on their coding evals. The guardrails that kept a 2024 model
-from writing junk were, by 2026, fighting the model's own judgment — and the model was
-paying a reasoning tax to arbitrate between instructions that disagreed.
+Two claims are usually cited for "instructions accrete and should be pruned."
 
-The Amplifier ecosystem shipped bundles whose always-on context reached **15–20k tokens per
-session** before a manual migration cut it back.
+**Anthropic** reported removing over 80% of the Claude Code system prompt for Claude 5
+generation models with no measurable eval loss. Read the primary source closely and it
+contains **no methodology**: no eval names, no task counts, no confidence intervals, no
+ablation procedure. It is an engineering-blog assertion, and this project used to treat it
+as a result.
 
-Both were rescues. A human happened to look. Neither was a mechanism — and the next
-generation of scaffolding is already accreting behind them.
+**The Amplifier ecosystem** cut a 15–20k token/session context bloat by hand. Real, but a
+rescue rather than a measurement.
+
+Meanwhile the **only peer-reviewed instruction-ablation study** points the other way.
+[arXiv:2601.20404](https://arxiv.org/abs/2601.20404) ran agents over 10 repositories and
+124 pull requests, with and without an `AGENTS.md` file:
+
+| | With instructions |
+|---|---|
+| Median runtime | **28.64% lower** |
+| Output tokens | **16.58% lower** |
+| Task completion | comparable |
+
+**Adding** instructions made agents measurably more efficient.
+
+So: whether instruction removal helps is **unresolved**. One unpublished vendor claim says
+yes. One peer-reviewed study on a different artifact says adding helps. Nobody has run a
+systematic per-instruction ablation.
+
+**That gap is what this bundle is for.** Preceptor is not a claim that removal helps — it
+is the apparatus that can find out, and a null or negative result is a real contribution
+rather than a failure.
+
+## Why the gap exists
+
+Every published prompt optimizer is structurally incapable of answering it:
+
+| System | Removes instructions? |
+|---|---|
+| GEPA (ICLR 2026 Oral) | Incidentally — a rewrite may be shorter. No delete operator. |
+| **ACE** | **Actively resists** — design goal is fighting "brevity bias" via *grow-and-refine* |
+| DSPy / MIPROv2 | Rewrites instructions, selects demos. No removal. |
+| TextGrad, PromptBreeder | Additive by construction |
+
+> Every one has the same bias: fitness is task score, and instruction length is
+> unconstrained. Adding a plausible instruction is free; removing a real one is risky. So
+> the search drifts monotonically longer. **An optimizer only removes what its objective
+> charges it for keeping.**
+
+Preceptor charges for it.
 
 ## The loop
 
@@ -159,6 +197,46 @@ The mechanism is more general than the bundle. If you're building on this:
   tokens?" question, the refusal to delete without evidence — those are the same discipline
   pointed inward. This repo's [`AGENTS.md`](AGENTS.md) does exactly that.
 
+## Calibration — hill-climbing, done correctly
+
+`bench/climb.py` searches instruction sets: propose a mutation, measure it, keep it only if
+a pre-registered rule says so. It can **ADD and REMOVE**, which no published optimizer does.
+
+The accept rule is **asymmetric**, and that is the entire design:
+
+```
+ADD     superiority     — must show a positive effect. no-effect and
+                          inconclusive both REJECT. An addition earns its place.
+
+REMOVE  non-inferiority — upper bound on the loss must sit below a
+                          pre-registered margin. NOT "the drop wasn't
+                          significant" — that is failure-to-reject, and an
+                          underpowered test manufactures it for free.
+```
+
+**Why removals are batched.** Budget `m` removals against a total tolerable loss `Δ`, and
+each gets margin `δ ≤ Δ/m`. Required n scales as `1/δ²`. Ten single removals at δ=0.5pp
+needs **~37,000 paired evaluations each** — not expensive, *impossible*. One batch of ten
+at δ=5pp needs ~100× fewer.
+
+**The ratchet, and the guard against it.** A remove-capable climber where removals pass on
+"no measured harm" points straight at the empty prompt: additions must clear a bar,
+removals only have to fail to trip an alarm. ACE measured where that ends — context
+collapsed from 18,282 tokens @ 66.7 accuracy to 122 tokens @ **57.1, below the 63.7
+no-adaptation baseline**. So an **anchor** re-checks against the *original* baseline every
+3 accepts and halts the run if individually-safe moves have compounded.
+
+That anchor caught a bug in its own first implementation: the budget grew with the accept
+count, so it could never fire. `test_anchor_breach_stops_the_climb` found it.
+
+**Overfitting is structural, not advisory.** Three splits — `harvest` (propose here),
+`climb` (burned), `confirm` (**sealed**; `.confirm` raises until explicitly unsealed, and
+every unseal is logged). RSEA ablated exactly this gate: without it, in-sample hits **100.0
+while test sits at 66.7** — a 33-point gap.
+
+Full thresholds, hypotheses, and validity gates: [`bench/PREREGISTRATION.md`](bench/PREREGISTRATION.md).
+Written before the first run, hashed, and void if it changes mid-run.
+
 ## Status — honest about what is and isn't proven
 
 This ships **instrumentation before autonomy**, deliberately. The alternative is authoring a
@@ -171,16 +249,20 @@ exists to catch.
 | **v1 — dose, human-approved** | Working, **locked** | One real cue proven to retire on evidence |
 | **v2 — autonomous** | Locked | `false_fade_rate < 0.10` over ≥ 40 attempts |
 
-Things this does **not** yet claim: that earned per-model cues beat generic ones; that a
-continuous loop beats a one-time human pass. [`docs/theory/05-expert-review.md`](docs/theory/05-expert-review.md)
-contains the experiment designed to embarrass this project if those claims are false,
-including the sham-cue arm that tests whether "earned" means anything at all.
+Things this does **not** claim: that removal helps; that earned per-model cues beat generic
+ones; that a continuous loop beats a one-time human pass.
+[`docs/theory/05-expert-review.md`](docs/theory/05-expert-review.md) contains the
+experiment designed to embarrass this project if those claims are false — including the
+sham-cue arm that tests whether "earned" means anything at all, and the `bloat` arm that
+tests the thesis in the direction arXiv:2601.20404 says it may fail.
 
 ## Docs
 
 | | |
 |---|---|
 | [`docs/theory/01-preceptor-thesis.md`](docs/theory/01-preceptor-thesis.md) | The argument |
+| [`docs/theory/06-empirical-program.md`](docs/theory/06-empirical-program.md) | **The empirical program** — what is and isn't proven, and the experiment that settles it |
+| [`bench/PREREGISTRATION.md`](bench/PREREGISTRATION.md) | Thresholds, accept rules, and validity gates, fixed before the first run |
 | [`docs/theory/05-expert-review.md`](docs/theory/05-expert-review.md) | Five specialist reviews, the defects found, what changed |
 | [`docs/AUTONOMY.md`](docs/AUTONOMY.md) | Why the lock exists and how it opens |
 | [`docs/CONSENT.md`](docs/CONSENT.md) | What is recorded, what never is, and your controls |

@@ -63,6 +63,71 @@ claims to sit off the model's path, and this is the check on that claim.
 
 Results land in `bench-results/latest.json` (gitignored — they are machine-specific).
 
+## Final run, 2026-08-30 — DTU, n=30, working observer, all arms warmed
+
+The first run that measures what it claims to. The observer records (662 records),
+every arm gets an identical warm-up, and the numbers are adequately powered.
+
+| Arm | run time | provision | correct | records |
+|---|---|---|---|---|
+| baseline | **5.01s ± 1.12** | 91.0s | 30/30 | 0 |
+| observe-off | **11.95s ± 1.10** | 91.4s | 30/30 | 0 |
+| observe-on | **11.59s ± 1.01** | 89.5s | 30/30 | **662** |
+
+```
+OVERHEAD vs baseline
+  observe-off   positive   delta=+6.940 (+138.5%)  d=+6.26  t=24.25 df=58.0
+  observe-on    positive   delta=+6.579 (+131.3%)  d=+6.17  t=23.90 df=57.4
+
+HARM    none — 90/90 correct
+POWER   n=30. Need ~25 for d=0.8. Bar met.
+```
+
+### The finding, stated plainly
+
+**Composing Preceptor costs ~6.9s of session startup — a 138% increase on a
+trivial task.** That is not a rounding error and it is not noise: d=6.26, t=24.
+It is the single largest effect measured in this project, and it is a cost, not
+a benefit.
+
+**Recording is free.** `observe-on − observe-off = −0.36s`, i.e. within noise and
+nominally negative. The entire cost is in *loading* the bundle — three modules,
+four agents, and context files — not in the observer doing its job.
+
+That split matters for what to do about it. The observer's design goal was to
+sit off the model's hot path, and it does. The bundle's *composition* is what
+is expensive, which is a packaging problem with obvious levers (lazy module
+activation, thinner default composition, agents loaded on demand) rather than a
+fundamental one.
+
+### Why the earlier "no-effect" was wrong
+
+The 2026-08-29 run below reported `no-effect` at the same n=30. It was measuring
+an inert bundle: the observer never mounted, so `observe-on` and `observe-off`
+were the same arm, and both were composed by a path (`bundle add --app`) that did
+not load the hook at all. Three defects had to be fixed before this number could
+exist — see `docs/theory/06-empirical-program.md` §11.
+
+### Two artifacts caught and killed on the way here
+
+Both would have produced confident, publishable, wrong numbers.
+
+1. **Cold resolution counted as bundle cost.** Passing `--bundle <git-url>` per
+   trial re-resolves from git on every run: +28.1s on `observe-off`, +28.6s on
+   `observe-on`, +0s on baseline. Both bundle arms, neither baseline — that is
+   resolution, not bundle overhead. Reported as-is: a fabricated **+74%
+   regression**, with d=7.37 and t=28.5 behind it.
+
+2. **Warming only the treatment arms.** The fix for (1) warmed the cache during
+   provisioning for bundle arms only, which made them look **3.5× faster** than
+   baseline (10.5s vs 38.0s). Mirror image of the same error.
+
+The tell in both cases was the same and it is worth keeping: **an effect that
+appears in every treatment arm but not the control is usually a property of how
+the arms were built, not of what they contain.**
+
+---
+
 ## Second run, 2026-08-29 — DTU, n=30 per arm (POWERED)
 
 90 isolated containers, one per trial, destroyed after. 12.9 min wall at 8-way

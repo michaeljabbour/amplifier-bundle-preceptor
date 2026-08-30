@@ -276,3 +276,64 @@ from day one. Every metric here is deterministic.
 | d = 0.5 (medium) | **63** |
 
 `aggregate.py` prints this on every run and says plainly when a comparison is underpowered.
+
+---
+
+## The calibration loop, wired to real measurement
+
+`bench/climb_dtu.py` connects `climb.py`'s injected `evaluate` callback to
+`dtu_run.py`'s trial machinery. Nothing is simulated — every number comes from a
+real session in a real container that is destroyed afterwards.
+
+```bash
+python3 bench/climb_dtu.py --control-only --trials 5   # validity gate
+python3 bench/climb_dtu.py --trials 5                  # gate, then climb
+```
+
+### Validity gate — PASSED (2026-08-30)
+
+Before any climb, the harness must prove it can reject a mutation known to be
+bad. The planted regression is the `observe-off` arm, measured at +6.9s / +138%
+at n=30:
+
+```
+champion    4.07s  (n=5)
+candidate  11.74s  (n=5)
+
+decision: REJECTED
+reason  : ADD failed superiority: positive (delta=+7.664 (+188.1%)
+          d=+5.77  t=9.12 df=4.0)
+
+GATE PASSED — harness can detect a planted regression
+```
+
+If this ever accepts a bad move, every other number the harness produces is
+unfalsifiable and the run should be discarded rather than reported.
+
+### The climb — 0 of 2 moves accepted
+
+```
+champion : (baseline — nothing earned its place)
+stopped  : proposer returned no admissible moves
+accepted : 0 / 2 moves
+  ADD  observe-off   rejected  delta=+5.909 (+99.2%)  d=+2.95  t=4.67
+  ADD  observe-on    rejected  delta=+4.709 (+79.0%)  d=+2.93  t=4.63
+```
+
+**This is the loop working, not the loop failing.** Both candidate mutations make
+sessions slower, both were rejected on a superiority test, and the monotone-safe
+property held: with nothing strictly better than the null, the climb returns the
+baseline unchanged. A hill climber that accepted either of these would be worse
+than useless.
+
+The `confirm` split was never unsealed (`confirm_access_count: 0`) — there was no
+result worth confirming.
+
+### What the loop cannot do yet, and why that is correct
+
+The objective here is session wall-clock, because that is what the n=30 run found
+to be large and actionable. The designed objective — developer-correction turns —
+needs earned cues, and none exist. `correction_turns.py` is wired and tested and
+waiting; manufacturing cues to give the climber something to chew on would be
+authoring a result from priors, which is the exact failure this bundle exists to
+catch.

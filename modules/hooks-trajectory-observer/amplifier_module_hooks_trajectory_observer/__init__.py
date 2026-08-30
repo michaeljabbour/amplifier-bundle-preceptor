@@ -12,6 +12,7 @@ __amplifier_module_type__ = "hook"
 import hashlib
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from itertools import count
@@ -392,14 +393,41 @@ async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = 
     """
     config = config or {}
 
-    if not config.get("enabled", False):
+    # Consent has TWO paths, and the environment variable is not a convenience --
+    # it is the one that provably works.
+    #
+    # The bundle-config path (`config.enabled` from a behavior YAML) is correct in
+    # principle and was the original sole mechanism. It has now failed in a
+    # Digital Twin in two distinct ways: first because a duplicate module
+    # declaration let an included behavior's `enabled: false` win entire over a
+    # root-level override, and then -- after that was fixed and the composition
+    # verified correct (hook present exactly once, source path resolving, module
+    # importable) -- because mount() was simply never called at all. Both failures
+    # were silent: no error, no records, and no way for a user to tell whether
+    # they had opted in.
+    #
+    # So consent does not depend on composition semantics. PRECEPTOR_ENABLED=1 is
+    # explicit, per-session, impossible to set by accident, and trivially
+    # verifiable by the person setting it. Either path turns recording on; the
+    # default remains off.
+    env_consent = os.environ.get("PRECEPTOR_ENABLED", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if not (config.get("enabled", False) or env_consent):
         logger.info(
-            "trajectory-observer: disabled (enabled=False); registering no handlers"
+            "trajectory-observer: disabled; registering no handlers "
+            "(set PRECEPTOR_ENABLED=1 or config.enabled to record)"
         )
         return
 
-    root_template = config.get("root", "~/.amplifier/projects/{project}/preceptor")
-    flush_every = config.get("flush_every", 25)
+    root_template = os.environ.get("PRECEPTOR_ROOT") or config.get(
+        "root", "~/.amplifier/projects/{project}/preceptor"
+    )
+    flush_every = int(
+        os.environ.get("PRECEPTOR_FLUSH_EVERY") or config.get("flush_every", 25)
+    )
     retention_days = config.get("retention_days", 90)
     priority = config.get("priority", 200)
     record_payload_shapes = config.get("record_payload_shapes", True)

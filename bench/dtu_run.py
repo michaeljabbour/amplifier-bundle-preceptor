@@ -37,6 +37,12 @@ REPO = "git+https://github.com/michaeljabbour/amplifier-bundle-preceptor@main"
 
 # Arms. Each differs ONLY in which bundle gets composed -- task, model, image,
 # and provisioning are identical, which is what makes the comparison controlled.
+# Registered bundle names, used to select an arm from a WARM cache at run time.
+ARM_BUNDLE_NAMES: dict[str, str] = {
+    "observe-off": "preceptor-observe-only",
+    "observe-on": "preceptor-observe-on",
+}
+
 ARMS: dict[str, str | None] = {
     "baseline": None,
     "observe-off": f"{REPO}#subdirectory=bundles/observe-only.yaml",
@@ -145,10 +151,37 @@ def run_trial(arm: str, task: tuple[str, str, str], idx: int) -> Trial:
     bundle = ARMS[arm]
     # Env consent is independent of composition -- see the module docstring.
     env_prefix = "PRECEPTOR_ENABLED=1 " if arm == "observe-on" else ""
-    # NOT composed via `bundle add --app`. Verified by hand in a container: the
-    # same bundle composed with --app records 0 and passed explicitly with
-    # --bundle records 4. The arm is selected on the run command instead.
-    extra = ""
+    # Two requirements pulling against each other:
+    #   * `bundle add --app` caches the bundle but does NOT mount the hook (0 records)
+    #   * `--bundle <git-url>` mounts the hook but re-resolves from git EVERY run
+    #
+    # Passing the URL per-run cost +28s on both bundle arms and 0s on baseline --
+    # that is resolution, not bundle overhead, and reporting it as the latter
+    # would have been a fabricated 74% regression.
+    #
+    # So: register (and thereby cache) at PROVISION time, then select the arm by
+    # registered NAME at run time. Hook mounts, cache is warm, and what is left is
+    # the bundle's real cost.
+    # Warm the bundle cache during PROVISIONING with a throwaway run, then pass the
+    # same URL per-trial. Two problems solved at once:
+    #   * `bundle add --app` caches but does not mount the hook (0 records)
+    #   * `--bundle <git-url>` mounts, but cold-resolves from git on every run --
+    #     which cost +28s on BOTH bundle arms and 0s on baseline. That is
+    #     resolution, not bundle overhead, and reporting it as the latter would
+    #     have been a fabricated 74% regression.
+    # A warm-up run leaves the cache populated, so the measured trials pay only
+    # the bundle's real cost.
+    # EVERY arm gets a warm-up, baseline included. Warming only the treatment
+    # arms made them look 3.5x FASTER than baseline (10.5s vs 38.0s) -- the
+    # mirror image of the +74% artifact, and just as wrong. Whatever the warm-up
+    # caches (bundle resolution, provider handshake, model list) must be cached
+    # identically in all arms, or the comparison measures the warm-up.
+    warm = (
+        f"    - PRECEPTOR_ENABLED=1 amplifier run --bundle '{bundle}' 'warmup' || true"
+        if bundle
+        else "    - PRECEPTOR_ENABLED=1 amplifier run 'warmup' || true"
+    )
+    extra = warm
     bundle_flag = f"--bundle {json.dumps(bundle)} " if bundle else ""
     prof = Path(tempfile.mkdtemp(prefix="ptrial-")) / "p.yaml"
     prof.write_text(PROFILE.format(extra=extra), encoding="utf-8")

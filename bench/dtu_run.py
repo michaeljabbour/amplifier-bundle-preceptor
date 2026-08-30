@@ -145,7 +145,11 @@ def run_trial(arm: str, task: tuple[str, str, str], idx: int) -> Trial:
     bundle = ARMS[arm]
     # Env consent is independent of composition -- see the module docstring.
     env_prefix = "PRECEPTOR_ENABLED=1 " if arm == "observe-on" else ""
-    extra = f"    - amplifier bundle add '{bundle}' --app" if bundle else ""
+    # NOT composed via `bundle add --app`. Verified by hand in a container: the
+    # same bundle composed with --app records 0 and passed explicitly with
+    # --bundle records 4. The arm is selected on the run command instead.
+    extra = ""
+    bundle_flag = f"--bundle {json.dumps(bundle)} " if bundle else ""
     prof = Path(tempfile.mkdtemp(prefix="ptrial-")) / "p.yaml"
     prof.write_text(PROFILE.format(extra=extra), encoding="utf-8")
 
@@ -173,7 +177,7 @@ def run_trial(arm: str, task: tuple[str, str, str], idx: int) -> Trial:
                 "--",
                 "bash",
                 "-lc",
-                f"{env_prefix}amplifier run --output-format json {json.dumps(prompt)}",
+                f"{env_prefix}amplifier run {bundle_flag}--output-format json {json.dumps(prompt)}",
             ],
             timeout=900,
         )

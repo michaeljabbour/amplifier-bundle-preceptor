@@ -68,7 +68,12 @@ provision:
   setup_cmds:
     - apt-get update && apt-get install -y git curl
     - curl -LsSf https://astral.sh/uv/install.sh | sh
-    - uv tool install -vv git+https://github.com/microsoft/amplifier
+    # cryptography 50.0.1 ships an aarch64 wheel whose Rust binding SIGILLs on
+    # this VM (exit 132). It crashes the process during module loading -- and
+    # because tools load BEFORE hooks, the crash lands after tools and before
+    # any hook mounts. That is the entire reason observe-on recorded nothing:
+    # not composition, not consent, a segfaulting dependency two layers down.
+    - uv tool install -vv git+https://github.com/microsoft/amplifier --with "cryptography==45.0.7"
     - amplifier bundle add git+https://github.com/microsoft/amplifier-foundation@main --app
 {extra}
     - |
@@ -138,6 +143,8 @@ def run_trial(arm: str, task: tuple[str, str, str], idx: int) -> Trial:
     cid = f"pt-{arm}-{name}-{idx}-{uuid.uuid4().hex[:6]}"
 
     bundle = ARMS[arm]
+    # Env consent is independent of composition -- see the module docstring.
+    env_prefix = "PRECEPTOR_ENABLED=1 " if arm == "observe-on" else ""
     extra = f"    - amplifier bundle add '{bundle}' --app" if bundle else ""
     prof = Path(tempfile.mkdtemp(prefix="ptrial-")) / "p.yaml"
     prof.write_text(PROFILE.format(extra=extra), encoding="utf-8")

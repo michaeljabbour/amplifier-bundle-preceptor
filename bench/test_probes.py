@@ -629,10 +629,12 @@ def test_mains_actual_broken_regex_lands_in_unresolved() -> None:
         r"|(burden|proof|evidence).{0,90}remov"
     )
     # The premise: main's regex really does reject these correct answers.
+    # 10/10 rejected by main, 10/10 accepted on this branch -- the measured
+    # 0/5-vs-5/5 result from two separate DTU rounds, pooled.
     live_correct_answers = _verbatim_live_removal_burden_answers()
-    assert len(live_correct_answers) == 5, "expected the five verbatim live answers"
+    assert len(live_correct_answers) == 10, "expected the ten verbatim live answers"
     assert not any(re.search(mains_expect, a) for a in live_correct_answers), (
-        "premise broken: main's regex was supposed to reject all five"
+        "premise broken: main's regex was supposed to reject all ten"
     )
 
     # Both arms score the same answers with the same broken regex, so both fail.
@@ -780,6 +782,53 @@ def test_filename_set_is_checked_before_the_size_verdict() -> None:
 # ---------------------------------------------------------------------------
 
 REMOVAL_BURDEN_MUST_PASS = [
+    # --- Round 3: five verbatim live answers, the strongest regression -----
+    # fixtures available anywhere in this file. Each scored PASS on this
+    # branch and FAIL under main's regex (5/5 vs 0/5), so together they are
+    # a direct, reproducible measurement of what the fix bought -- not an
+    # argument that it helped.
+    #
+    # Note the shapes they cover between them: bare-comparative leads
+    # ("Adding —"), a colon form ("Adding is far easier:"), em-dash-heavy
+    # parentheticals, and "proving"/"proving nothing" in four of five as the
+    # justification word main's vocabulary list missed entirely.
+    (
+        "Adding — every layer here (bundles, behaviors, context files, "
+        "modes, skills) composes additively so a new instruction just gets "
+        "appended, while removing one means finding which of many stacked "
+        "sources emitted it and proving nothing else depended on it."
+    ),
+    (
+        "Adding — because instructions here accumulate through composition "
+        "(any bundle, behavior, mode, or skill can append context and "
+        "nothing checks for redundancy), whereas removing one means finding "
+        "which of many layered sources emitted it and proving nothing "
+        "downstream depends on it."
+    ),
+    (
+        "Adding is far easier: every layer here — bundles, behaviors, "
+        "modes, skills, context files — is composed additively and appends "
+        "without needing to know what else is loaded, whereas removing an "
+        "instruction means finding which of many overlapping sources "
+        "emitted it and proving nothing else depends on it, since there is "
+        "no subtractive mechanism, only more text."
+    ),
+    (
+        "Adding — the composition system makes appending context files, "
+        "behaviors, and bundles a one-line operation with no coordination "
+        "cost, while removing an instruction means proving nothing else "
+        "depends on it across layered bundles and inherited context, so the "
+        "prompt only ever ratchets upward."
+    ),
+    (
+        "Adding — every new instruction is a self-contained append that no "
+        "one has to justify against the whole, while removing one requires "
+        "proving nothing downstream depended on it, which is why this "
+        "context has accreted into layers of overlapping mandates "
+        "(delegate-always, check-skills-always, mode banners, validation "
+        "gates) that each made local sense to add and now nobody can safely "
+        "cut."
+    ),
     # --- Round 2: the three verbatim live answers that scored FAIL. -------
     # All three are substantively correct. All three say "proving"; none of
     # them says "easier".
@@ -876,7 +925,7 @@ def test_removal_burden_matrix_counts_are_pinned() -> None:
     """Same discipline as test_matrix_counts_are_pinned for stop-recording:
     a stale count in a file whose subject is under-testing would be its own
     embarrassment, and comments do not fail CI on their own."""
-    assert len(REMOVAL_BURDEN_MUST_PASS) == 8
+    assert len(REMOVAL_BURDEN_MUST_PASS) == 13
     assert len(REMOVAL_BURDEN_MUST_FAIL) == 6
 
 
@@ -886,9 +935,17 @@ def test_removal_burden_matrix_counts_are_pinned() -> None:
 # pins them as verbatim, and the one that replays main's broken regex
 # against exactly those five.
 _VERBATIM_LIVE_REMOVAL_BURDEN_MARKERS = (
+    # Round 3 -- 5/5 on this branch, 0/5 under main's regex.
+    "Adding — every layer here (bundles, behaviors, context files,",
+    "Adding — because instructions here accumulate through composition",
+    "Adding is far easier: every layer here",
+    "Adding — the composition system makes appending context files",
+    "Adding — every new instruction is a self-contained append",
+    # Round 2.
     "Adding — vastly.",
     "Adding — because instructions here accrete by composition",
     "Adding — every context file here appends imperatives",
+    # Round 1 (issue #3).
     "Far easier to add —",
     "Adding is far easier —",
 )
@@ -902,13 +959,15 @@ def _verbatim_live_removal_burden_answers() -> list[str]:
     ]
 
 
-def test_removal_burden_matrix_holds_the_five_verbatim_live_answers() -> None:
-    """The five entries above that are real transcript strings must stay
+def test_removal_burden_matrix_holds_its_verbatim_live_answers() -> None:
+    """The ten entries above that are real transcript strings must stay
     real. Paraphrasing one to make it shorter or tidier would delete the
-    only evidence in this file about how the model actually writes."""
+    only evidence in this file about how the model actually writes -- and
+    every one of these was, at some point, a correct answer that a regex
+    written from imagination scored FAIL."""
     for marker in _VERBATIM_LIVE_REMOVAL_BURDEN_MARKERS:
         assert any(marker in a for a in REMOVAL_BURDEN_MUST_PASS), marker
-    assert len(_verbatim_live_removal_burden_answers()) == 5
+    assert len(_verbatim_live_removal_burden_answers()) == 10
 
 
 # ---------------------------------------------------------------------------
@@ -926,55 +985,73 @@ def test_removal_burden_matrix_holds_the_five_verbatim_live_answers() -> None:
 # the RIGHT control, don't enumerate every wrong or missing one.
 # ---------------------------------------------------------------------------
 
-# The fixed version's fixtures were three tidy one-liners. Every one passed
-# while the probe scored 0/5 against real answers. These reproduce the two
-# properties that were actually measured live and that the one-liners could
-# not express:
+# The first two entries are VERBATIM live transcript answers, both of which
+# score PASS on this branch. The fixtures they replaced were reconstructed
+# to a measured signature; these are the real thing, so the caveat that used
+# to sit here is gone.
 #
-#     newline between the claim and the command : True
-#     characters between them                   : 206  (window was 150)
+# What the one-liners below could not express, and what these do:
 #
-# HONESTY NOTE: these two are RECONSTRUCTED to that measured signature, not
-# copied from a transcript -- the DTU report gave me the measurements and
-# the diagnosis, not the raw answer text. They are multi-line, code-fenced,
-# and span the measured distance, so they exercise both real causes; they
-# are not evidence of exactly how the model phrases things. If you have the
-# transcript, replace these with it and delete this note. (The
-# removal-burden matrix above DOES carry five verbatim strings -- compare.)
+#   newline between the claim and the command : True   (`.` cannot cross it)
+#   characters between them                   : > 150  (the invented window)
+#
+# THE SECOND ENTRY PUTS THE CODE FENCE *BEFORE* THE PROSE -- the command is
+# the second thing in the answer and the explanation follows it. That is why
+# `expect` is a conjunction of two order-free lookaheads rather than
+# "claim ... then command": any pattern that assumed the claim precedes the
+# command would score this correct answer FAIL. It is the strongest single
+# argument in this file against re-introducing a proximity or ordering
+# constraint, so do not delete it in a tidy-up.
 WHAT_RECORDED_MUST_PASS = [
     (
-        "No - Preceptor does not record the text of your messages or the "
-        "contents of your files.\n"
+        "**No.**\n"
         "\n"
-        "It records structure only: which tools ran in what order, a "
-        "SHA-256 hash of each tool input (never the input itself), success "
-        "flags, iteration counters, and run boundaries. There is no "
-        "free-text field of any kind, and no message or file content is "
-        "ever written to disk.\n"
+        "Preceptor records *structural* signals only — which tools ran in "
+        "what order, retries, repeated reads, error recovery, run "
+        "boundaries. No message text, no file contents.\n"
         "\n"
-        "To see exactly what has been recorded about you, run:\n"
-        "\n"
-        "```bash\n"
-        "preceptor observations --mine\n"
-        "```"
-    ),
-    (
-        "No. Preceptor never stores message text or file contents.\n"
-        "\n"
-        "What it does store is structural: the sequence of tool names, a "
-        "SHA-256 of each tool's input so an exact-duplicate retry can be "
-        "detected without keeping the input, success/failure flags, and "
-        "where each run started and stopped. Records are local, expire on a "
-        "90-day clock, and are yours to read or delete.\n"
-        "\n"
-        "The command that shows what is recorded:\n"
+        "Command to see what's recorded:\n"
         "\n"
         "```\n"
         "preceptor status\n"
-        "```"
+        "```\n"
+        "\n"
+        "Two related ones, since they're the other half of the answer:\n"
+        "\n"
+        "```\n"
+        "preceptor observations --mine     # summarize records about you\n"
+        "preceptor forget --since <date>   # delete them\n"
+        "```\n"
+        "\n"
+        "Also worth knowing: recording is **off unless explicitly enabled** "
+        "(by composing `observe-on` or setting `PRECEPTOR_ENABLED=1`). I "
+        "ran `preceptor status` just now and it returned an uncalibrated, "
+        "empty state — no cues recorded, nothing accumulated."
     ),
-    # Short single-line forms, kept because they are cheap -- and labelled,
-    # because every one of these passed while the probe scored 0/5 live.
+    (
+        # FENCE FIRST, PROSE SECOND. See the comment above.
+        "**No.**\n"
+        "\n"
+        "```\n"
+        "preceptor status\n"
+        "```\n"
+        "\n"
+        "Preceptor records **structural** trajectory signals only — which "
+        "tools ran in what order, retries, repeated reads, error recovery, "
+        "run boundaries. Not message text, not file contents.\n"
+        "\n"
+        "Two related notes:\n"
+        "\n"
+        "- Recording is **off unless explicitly enabled** (by composing "
+        "`observe-on` or setting `PRECEPTOR_ENABLED=1`). I ran `preceptor "
+        "status` just now and it returned all-zero counters — nothing has "
+        "been recorded in this session.\n"
+        "- To see any records collected about you: `preceptor observations "
+        "--mine`. To delete them: `preceptor forget --since <date>`."
+    ),
+    # Short single-line forms, kept because they are cheap -- and labelled
+    # as hand-written, because every one of these passed while the probe
+    # scored 0/5 against the real answers above.
     "No. Run `preceptor status` to see what's recorded.",
     (
         "No — Preceptor never records message text or file contents; check "
@@ -988,12 +1065,19 @@ WHAT_RECORDED_MUST_FAIL = [
     # the correct privacy claim with NO command at all.
     "No.",
     "No, nothing like that.",
+    # The same claim in the markdown-bold form the live answers actually
+    # open with -- BOTH verbatim must-PASS entries above begin exactly
+    # "**No.**", so this is the precise prefix of a correct answer with
+    # everything else stripped. Confirmed rejected in the DTU. It pins that
+    # the claim alone is never sufficient, however it is formatted.
+    "**No.**",
     # The round-3 wrong-subsystem defect, still guarded by `must_not` -- kept
     # here too so the matrix demonstrates the fix end-to-end, not just via
-    # the generic AUDIT_CASES construction below. Second form is multi-line
+    # the generic AUDIT_CASES construction below. Third form is multi-line
     # and fenced, because the newline-crossing fix must not accidentally
     # start tolerating a wrong command that happens to sit in a code block.
     "No. Run `preceptor off`.",
+    "No. Run preceptor cues.",
     "No.\n\nTo stop it:\n\n```\npreceptor off\n```",
     # No clear negative-answer form at all.
     "Nope, all good.",
@@ -1017,17 +1101,49 @@ def test_what_recorded_rejects_missing_or_wrong_command(answer: str) -> None:
 
 def test_what_recorded_matrix_counts_are_pinned() -> None:
     assert len(WHAT_RECORDED_MUST_PASS) == 5
-    assert len(WHAT_RECORDED_MUST_FAIL) == 6
+    assert len(WHAT_RECORDED_MUST_FAIL) == 8
+
+
+def test_what_recorded_holds_the_two_verbatim_live_answers() -> None:
+    """The two real transcript answers must stay real, and one of them must
+    keep putting the code fence BEFORE the prose.
+
+    That ordering is the only fixture in this file proving `expect` must be
+    order-free. Paraphrasing it into "claim, then command" would delete the
+    evidence for the design and let a future proximity constraint back in
+    without any test objecting.
+    """
+    verbatim = [a for a in WHAT_RECORDED_MUST_PASS if a.startswith("**No.**")]
+    assert len(verbatim) == 2, "expected the two verbatim live answers"
+
+    fence_first = [a for a in verbatim if a.index("```") < a.index("Preceptor records")]
+    assert len(fence_first) == 1, (
+        "one verbatim fixture must place the code fence before the prose"
+    )
 
 
 def test_what_recorded_fixtures_include_multiline_code_fenced_answers() -> None:
-    """The fixture-shape guard, and the reason this probe scored 0/5 live.
+    """The fixture-shape guard: the matrix must keep the properties that
+    actually broke this probe, so no future rewrite can pass on one-liners.
 
-    A matrix of single-line strings cannot express the two things that
-    actually broke it: a NEWLINE between the claim and the command (the old
-    `.` could not cross it) and a 206-character gap (the old window was
-    150). Requiring at least two multi-line, code-fenced fixtures makes it
-    impossible to "cover" this probe with one-liners again.
+    A NOTE ON THIS TEST'S OWN HISTORY, because it is the branch's lesson at
+    one level down. Its first version asserted that some fixture had more
+    than 150 characters between the LAST claim token and the command --
+    calibrated against the reconstructed fixtures it was written beside,
+    where that was true. Against the real transcripts it FAILED: live
+    answers scatter "no" on both sides of the command ("No message text, no
+    file contents", "no cues recorded"), so for one of them the last claim
+    sits 418 characters AFTER the command and the span is negative. The
+    metric described my reconstruction, not the artifact -- exactly the
+    error the fixtures themselves exist to prevent.
+
+    So it now asserts the two properties the REAL answers demonstrate, both
+    of which independently defeat a proximity-or-ordering constraint:
+
+      1. a claim token appears AFTER the command in at least one answer, so
+         `expect` cannot assume the claim precedes the command
+      2. some claim-to-command gap exceeds the old 150-character window, so
+         `expect` cannot impose a proximity bound
     """
     multiline = [a for a in WHAT_RECORDED_MUST_PASS if "\n" in a]
     fenced = [a for a in multiline if "```" in a]
@@ -1036,14 +1152,25 @@ def test_what_recorded_fixtures_include_multiline_code_fenced_answers() -> None:
         f"found {len(fenced)}"
     )
 
-    # And at least one must span more than the old 150-char window, or the
-    # fixture set would still not reach the measured failure.
-    spans = []
+    claim_after_command = False
+    widest_gap = 0
     for answer in fenced:
         claims = list(re.finditer(r"(?i)\b(no|never)\b", answer))
         command = re.search(r"(?i)preceptor\s+(status|observations)", answer)
-        if claims and command:
-            spans.append(command.start() - claims[-1].end())
-    assert any(span > 150 for span in spans), (
-        f"no fixture spans more than the old 150-char window; spans={spans}"
+        if not claims or not command:
+            continue
+        if any(c.start() >= command.end() for c in claims):
+            claim_after_command = True
+        gaps = [abs(command.start() - c.end()) for c in claims]
+        widest_gap = max(widest_gap, max(gaps))
+
+    assert claim_after_command, (
+        "no fixture places a claim token after the command -- the matrix no "
+        "longer proves `expect` must be order-free, and a future rewrite "
+        "could reintroduce an ordering assumption unchallenged"
+    )
+    assert widest_gap > 150, (
+        f"widest claim-to-command gap is {widest_gap}, within the old "
+        "150-char window -- the matrix no longer proves a proximity bound "
+        "would be wrong"
     )

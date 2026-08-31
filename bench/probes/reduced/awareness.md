@@ -5,8 +5,7 @@ tools ran in what order, retries, repeated reads, error recovery, run boundaries
 message content, no file contents.** It never gates or modifies anything.
 
 Recording is **off unless explicitly enabled** — by composing `observe-on` or setting
-`PRECEPTOR_ENABLED=1`. There is deliberately no `settings.yaml` switch: one was shipped
-and proven **inert** in a Digital Twin (zero records, exit 0, no error).
+`PRECEPTOR_ENABLED=1`.
 
 | Ask | Answer |
 |---|---|

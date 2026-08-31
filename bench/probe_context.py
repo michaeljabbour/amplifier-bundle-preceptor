@@ -115,6 +115,29 @@ def ask(container: str, question: str) -> str:
         return out.strip()
 
 
+def reduction_is_live(full_chars: int, reduced_chars: int) -> str | None:
+    """Return an abort message if there is no live reduction candidate, else None.
+
+    `reduced` must be strictly smaller than `full` for this ablation to measure
+    an actual reduction. Equal-or-larger means the candidate is stale (or was
+    never a reduction candidate at all) -- most likely because a previous
+    candidate was already accepted and merged into `full`, leaving `reduced` a
+    copy rather than a proposal. Running the arms anyway would hand
+    climb.decide() an ADD (or a no-op) mislabeled as a REMOVE, producing an
+    inverted or null verdict with no indication anything was wrong. This
+    fixture drifting out of sync is exactly how that happened once already.
+    """
+    if reduced_chars >= full_chars:
+        return (
+            "no live reduction candidate: `reduced` "
+            f"({reduced_chars}c) is not smaller than `full` ({full_chars}c). "
+            "Running now would score an inverted or null experiment. Put a "
+            "real reduction candidate in bench/probes/reduced/ before "
+            "re-running."
+        )
+    return None
+
+
 def run_arm(container: str, label: str, variant: dict[str, str], reps: int) -> dict:
     print(f"\n  arm: {label}")
     install_variant(container, variant)
@@ -154,14 +177,15 @@ def main() -> int:
     print("=" * 70)
     print("CONTEXT ABLATION -- does the reduction preserve what the context enables?")
     print("=" * 70)
-    print(
-        f"  full     {sum(len(v) for v in full.values()):>5}c  "
-        f"~{sum(len(v) for v in full.values()) // 4} tok"
-    )
-    print(
-        f"  reduced  {sum(len(v) for v in reduced.values()):>5}c  "
-        f"~{sum(len(v) for v in reduced.values()) // 4} tok"
-    )
+    full_chars = sum(len(v) for v in full.values())
+    reduced_chars = sum(len(v) for v in reduced.values())
+    print(f"  full     {full_chars:>5}c  ~{full_chars // 4} tok")
+    print(f"  reduced  {reduced_chars:>5}c  ~{reduced_chars // 4} tok")
+
+    abort = reduction_is_live(full_chars, reduced_chars)
+    if abort:
+        print(f"\n  ABORT -- {abort}", file=sys.stderr)
+        return 2
 
     # The attribution arm. Empty context files = the bundle composes, mounts, and
     # injects nothing. Anything still answered here was never being carried by

@@ -265,13 +265,49 @@ def _get_capability_safe(coordinator: Any, name: str) -> Any:
         return None
 
 
-def _project_slug(coordinator: Any) -> str | None:
+def _project_slug(coordinator: Any) -> str:
+    """Derive the `{project}` slug from the session working directory.
+
+    THIS FUNCTION IS DUPLICATED VERBATIM IN THREE MODULES and must stay
+    byte-identical in all of them:
+
+        modules/tool-preceptor/.../__init__.py        (here)
+        modules/hooks-trajectory-observer/.../__init__.py
+        modules/hooks-cue-injector/.../__init__.py
+
+    The duplication is deliberate -- AGENTS.md requires flat, independent
+    modules with no cross-imports -- so the agreement is enforced by
+    `tests/test_project_slug_agreement.py` at the repo root, which loads all
+    three and asserts they return the same slug for the same input. Change
+    one, change all three, or that test fails.
+
+    WHY IT MATTERS: these three modules must resolve `{project}` in
+    `~/.amplifier/projects/{project}/preceptor` to the SAME directory. They
+    did not. The observer WROTE to `.../projects/project/preceptor` while
+    this tool READ from `.../projects/-root-project/preceptor`, and the
+    injector used a third form again (`root-project`). Measured live in a
+    Digital Twin: 17 observation records on disk, `observations` reporting
+    `total_observations: 0`, and `forget` returning success having deleted
+    nothing. A privacy control that reports success while touching the wrong
+    directory is worse than one that plainly does not exist.
+
+    WHY THE DASHED FORM, not `Path(working_dir).name`:
+
+      1. Amplifier core already uses it. `/root/.amplifier/projects/
+         -root-project/` exists in a live container as core's own session
+         directory, so this convention is the ecosystem's, not ours.
+      2. `.name` COLLIDES. `/home/alice/project` and `/home/bob/project`
+         both yield `project`, so two unrelated checkouts would share one
+         observation store and one ledger -- meaning one person's records
+         are readable, and deletable, from the other's session. For a store
+         holding per-session behavioural records that is a defect, not an
+         inconvenience.
+    """
     working_dir = _get_capability_safe(coordinator, "session.working_dir")
     if not working_dir:
-        return None
-    text = str(working_dir)
-    slug = text.replace("/", "-").replace("\\", "-").replace(":", "")
-    return slug or None
+        return "default"
+    slug = str(working_dir).replace("\\", "-").replace("/", "-").replace(":", "")
+    return slug or "default"
 
 
 def _working_dir(coordinator: Any) -> Path:

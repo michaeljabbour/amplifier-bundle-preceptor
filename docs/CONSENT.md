@@ -65,7 +65,31 @@ release, and this one will change weekly.
 transmitted. Deleted after `retention_days` (default 90). The derived ledger is not sensitive
 and persists.
 
+`{project}` is the session's absolute working directory with path separators replaced by `-`,
+matching Amplifier core's own `~/.amplifier/projects/` convention: a session in
+`/root/project` records under `~/.amplifier/projects/-root-project/preceptor/`.
+
 `.gitignore` excludes `observations/` and `manifests/`. Do not commit them.
+
+### One-time migration: records written before this convention was fixed
+
+Earlier versions disagreed with themselves about `{project}`. The observer wrote to
+`~/.amplifier/projects/<directory-name>/preceptor/` (just the last path segment) while the
+tool read from the dashed form, so `preceptor observations` reported zero with records on
+disk and `preceptor forget` reported success having deleted nothing.
+
+**Any records written before this fix are still on disk under the old path, and nothing reads
+or deletes them now — including `forget`.** They are inert, but they are yours and they are
+not gone. To find and remove them:
+
+```bash
+ls ~/.amplifier/projects/*/preceptor/observations/     # old paths use the bare directory name
+rm -rf ~/.amplifier/projects/<directory-name>/preceptor/
+```
+
+This is deliberately a manual step rather than an automatic sweep: guessing which directories
+under `~/.amplifier/projects/` were ours and deleting them on a user's behalf is a worse
+failure than leaving files a user can see and choose to remove.
 
 ## Your controls
 

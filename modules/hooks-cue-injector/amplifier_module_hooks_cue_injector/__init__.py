@@ -313,9 +313,41 @@ def _write_manifest(
 def _project_slug(coordinator: Any) -> str:
     """Derive the `{project}` slug from the session working directory.
 
-    Matches the ecosystem-wide convention: the absolute working directory
-    path with path separators replaced by `-` (see
-    ``~/.amplifier/projects/<project-slug>/sessions/``).
+    THIS FUNCTION IS DUPLICATED VERBATIM IN THREE MODULES and must stay
+    byte-identical in all of them:
+
+        modules/hooks-cue-injector/.../__init__.py         (here)
+        modules/tool-preceptor/.../__init__.py
+        modules/hooks-trajectory-observer/.../__init__.py
+
+    The duplication is deliberate -- AGENTS.md requires flat, independent
+    modules with no cross-imports -- so the agreement is enforced by
+    `tests/test_project_slug_agreement.py` at the repo root, which loads all
+    three and asserts they return the same slug for the same input. Change
+    one, change all three, or that test fails.
+
+    WHY IT MATTERS: all three resolve `{project}` in
+    `~/.amplifier/projects/{project}/preceptor` and must land in the SAME
+    directory -- the observer writes records there, the tool reads and
+    deletes them, and this module reads the ledger and writes the per-session
+    dosing manifest. They disagreed THREE ways for `/root/project`:
+
+        tool-preceptor  '-root-project'
+        cue-injector    'root-project'    <- this function, stripped the dash
+        observer        'project'
+
+    The trailing `.strip("-")` here looked like tidying and was the whole
+    divergence from the tool: it made this module the only one whose
+    manifests landed outside the tree `preceptor why <session_id>` reads.
+
+    WHY THE DASHED FORM, UNSTRIPPED:
+
+      1. Amplifier core already uses it. `/root/.amplifier/projects/
+         -root-project/` exists in a live container as core's own session
+         directory -- leading dash included, which is why stripping it was
+         wrong rather than merely different.
+      2. `Path(working_dir).name` (what the observer used) COLLIDES:
+         `/home/alice/project` and `/home/bob/project` both yield `project`.
     """
     working_dir = None
     try:
@@ -328,7 +360,6 @@ def _project_slug(coordinator: Any) -> str:
     if not working_dir:
         return "default"
     slug = str(working_dir).replace("\\", "-").replace("/", "-").replace(":", "")
-    slug = slug.strip("-")
     return slug or "default"
 
 

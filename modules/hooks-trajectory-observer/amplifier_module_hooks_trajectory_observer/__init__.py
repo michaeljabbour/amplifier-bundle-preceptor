@@ -136,7 +136,45 @@ def _derive_ok(event: str, data: dict[str, Any]) -> bool:
 
 
 def _project_slug(coordinator: Any) -> str:
-    """Best-effort project slug derived from the session working directory."""
+    """Derive the `{project}` slug from the session working directory.
+
+    THIS FUNCTION IS DUPLICATED VERBATIM IN THREE MODULES and must stay
+    byte-identical in all of them:
+
+        modules/hooks-trajectory-observer/.../__init__.py   (here)
+        modules/tool-preceptor/.../__init__.py
+        modules/hooks-cue-injector/.../__init__.py
+
+    The duplication is deliberate -- AGENTS.md requires flat, independent
+    modules with no cross-imports -- so the agreement is enforced by
+    `tests/test_project_slug_agreement.py` at the repo root, which loads all
+    three and asserts they return the same slug for the same input. Change
+    one, change all three, or that test fails.
+
+    WHY IT MATTERS: this module WRITES the observation records that
+    tool-preceptor READS. Both resolve `{project}` in
+    `~/.amplifier/projects/{project}/preceptor`, and they disagreed. This
+    function returned `Path(working_dir).name` -> `project` while the tool
+    returned the dashed path -> `-root-project`, so the two never pointed at
+    the same directory for any real session (they coincide only when
+    `working_dir` is a filesystem root). Measured live in a Digital Twin: 17
+    records written here, `observations` reporting `total_observations: 0`,
+    `forget` returning success having deleted nothing.
+
+    WHY THE DASHED FORM, not `Path(working_dir).name` (what this used to do):
+
+      1. Amplifier core already uses it. `/root/.amplifier/projects/
+         -root-project/` exists in a live container as core's own session
+         directory, so this convention is the ecosystem's, not ours.
+      2. `.name` COLLIDES. `/home/alice/project` and `/home/bob/project`
+         both yield `project`, so two unrelated checkouts would share one
+         observation store -- one person's records readable, and deletable,
+         from the other's session.
+
+    MIGRATION: records this module wrote under the old `.name` slug stay on
+    disk at `~/.amplifier/projects/<dirname>/preceptor/` and are NOT read or
+    deleted by anything after this change. See docs/CONSENT.md.
+    """
     working_dir: Any = None
     try:
         working_dir = coordinator.get_capability("session.working_dir")
@@ -146,18 +184,10 @@ def _project_slug(coordinator: Any) -> str:
             exc_info=True,
         )
         working_dir = None
-    if working_dir:
-        try:
-            name = Path(str(working_dir)).name
-            if name:
-                return name
-        except Exception:
-            logger.debug(
-                "trajectory-observer: could not derive project slug from %r",
-                working_dir,
-                exc_info=True,
-            )
-    return "default"
+    if not working_dir:
+        return "default"
+    slug = str(working_dir).replace("\\", "-").replace("/", "-").replace(":", "")
+    return slug or "default"
 
 
 def _resolve_session_id(coordinator: Any) -> str:

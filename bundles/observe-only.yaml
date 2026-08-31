@@ -2,12 +2,20 @@ bundle:
   name: preceptor-observe-only
   version: 0.1.0
   description: |
-    The adoption path. Observation with nothing downstream of it — no ledger,
-    no cues, no injection, no agents. Run this, read the records, and decide
-    whether the form notes justify the rest.
+    The adoption path. Observation with nothing downstream of it — no cue
+    ledger writes, no dosing, no injection, no agents. Run this, read the
+    records, and decide whether the form notes justify the rest.
+
+    tool-preceptor is mounted, so the controls docs/CONSENT.md promises
+    (`preceptor status`, `preceptor observations --mine`, `preceptor forget`)
+    are actually reachable here, not merely documented in
+    context/awareness.md. It is mounted with the lean recording-consent
+    schema; it holds no ledger-write authority and cannot propose, promote,
+    retire, or dose a cue.
 
     Watching before coaching applies to this bundle's own rollout.
 
 includes:
   - bundle: git+https://github.com/microsoft/amplifier-foundation@main
   - bundle: preceptor:behaviors/preceptor-observer
+  - bundle: preceptor:behaviors/preceptor-consent

@@ -1,0 +1,47 @@
+bundle:
+  name: preceptor-consent-behavior
+  version: 0.1.0
+  description: |
+    Mounts tool-preceptor with the lean recording-consent operation set, for
+    bundles that have no `tools:` block of their own.
+
+    WHAT COMPOSING THIS DOES: it mounts the tool at all. The adoption bundles
+    (observe-only, observe-on) compose only the observer hook; without this
+    they mount no tools whatsoever, so `preceptor status` /
+    `preceptor observations --mine` / `preceptor forget --since <date>` --
+    which context/awareness.md ships and promises in every one of those
+    sessions -- had nothing to run against.
+
+    WHAT IT DOES NOT DO: grant the right to delete. `forget` is
+    unconditional on every PreceptorTool instance, gated by no config key at
+    all. It was briefly gated by `surface: consent` and that was a defect:
+    a knob whose value decides whether a person may delete data about
+    themselves is omitted silently by any composition that forgets it, and
+    the full loop (behaviors/preceptor.yaml, which sets no surface) was
+    exactly such a composition. See _SUBJECT_OPERATIONS in
+    modules/tool-preceptor/amplifier_module_tool_preceptor/__init__.py.
+
+    `surface: consent` below is purely SCHEMA NARROWING -- a token-cost knob.
+    See the comment on it.
+
+tools:
+  - module: tool-preceptor
+    source: ../modules/tool-preceptor
+    config:
+      # Same root the observer writes to (preceptor-observer.yaml /
+      # preceptor-observer-on.yaml) -- `forget` prunes THIS root's
+      # observations/, so a mismatched root would delete nothing.
+      root: ~/.amplifier/projects/{project}/preceptor
+
+      # SCHEMA NARROWING, NOT A PERMISSION. Advertises 3 operations
+      # (status, observations, forget) instead of all 14, each of which
+      # carries a name and description in the tool schema re-sent on every
+      # provider request. The bundles composing this run no injector and no
+      # ledger writer, so paying for promote_cue/retire_cue/log_assessment
+      # on every turn buys nothing. Same always-on cost discipline as the
+      # 500-token context policy.
+      #
+      # Removing this line changes only which operations are ADVERTISED.
+      # It cannot cost anyone their deletion right: `forget` is in every
+      # surface by construction, and execute() never consults `surface`.
+      surface: consent

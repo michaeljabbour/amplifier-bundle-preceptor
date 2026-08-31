@@ -73,7 +73,7 @@ and persists.
 |---|---|
 | See what exists | `preceptor status` |
 | Read your own records | `preceptor observations --mine` |
-| Stop recording | `enabled: false`, effective next session |
+| Stop recording | compose `observe-only`; unset `PRECEPTOR_ENABLED` |
 | Delete records | `preceptor forget --since <date>` |
 
 `forget` is real revocation, not a filter: it removes the records **and** marks any cue whose

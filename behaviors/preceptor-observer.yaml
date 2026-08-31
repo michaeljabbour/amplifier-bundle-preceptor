@@ -10,7 +10,11 @@ hooks:
     source: ../modules/hooks-trajectory-observer
     config:
       # Consent gate. Nothing is recorded until this is explicitly true.
-      # See docs/CONSENT.md. Set in ~/.amplifier/settings.yaml, not here.
+      # See docs/CONSENT.md. There is deliberately no settings.yaml stanza --
+      # an earlier draft documented one and a Digital Twin proved it inert
+      # (zero records, exit 0, no error). Turning this on means composing
+      # behaviors/preceptor-observer-on.yaml (or bundles/observe-on.yaml)
+      # instead of this file -- never editing this value directly.
       enabled: false
 
       # Where observation records land. One JSONL file per session.

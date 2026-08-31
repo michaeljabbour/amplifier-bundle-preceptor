@@ -24,10 +24,12 @@ promotion and retirement are proven mutually exclusive.
 
 The tool has one config flag that matters more than any other: `writable`.
 
-- `writable: false` (the default) -- every **write** operation returns a
-  failed `ToolResult` naming the credentialer agent. **Read** operations
-  (`status`, `cues`, `why`, `observations`, `read_profile`) always work.
-- `writable: true` -- the full operation set is available.
+- `writable: false` (the default) -- every **ledger-write** operation
+  (propose/promote/shadow/retire/restore/pin/mute a cue, log an assessment)
+  returns a failed `ToolResult` naming the credentialer agent. **Read**
+  operations (`status`, `cues`, `why`, `observations`, `read_profile`) always
+  work, and so does `forget` -- see below.
+- `writable: true` -- the full ledger-write operation set is available too.
 
 This is how per-agent scoping is achieved, with no extra plumbing: the
 `preceptor` behavior mounts a **read-only** instance for the general
@@ -55,6 +57,71 @@ tools:
 Nothing else in the bundle can write the ledger directly, and the tool
 itself refuses to let it -- there is no way to route around `credentialer`
 short of editing the YAML files by hand outside of Amplifier.
+
+### `forget` is gated by nothing, and that is deliberate
+
+`writable` gates **machine authority** -- cue-lifecycle decisions backed by
+measured evidence, exactly what `credentialer` exists to hold and nothing
+else in the bundle should.
+
+`forget` is **subject authority**. It deletes a user's own observation
+records because they asked; what authorizes it is that the records are about
+them, not any measurement, credential, or operator decision. So it is gated
+by nothing: not `writable`, not `surface`, not any future config key. Every
+`PreceptorTool` instance can execute it.
+
+That is a correction of a correction, and both errors were the same error.
+`forget` first sat in `_WRITE_OPERATIONS` behind `writable: true` -- held
+only by `credentialer` -- so the deletion right `docs/CONSENT.md` and
+`context/awareness.md` promise in every session was unreachable. The first
+fix moved it behind a **new** key, `surface: "consent"`. That fixed the two
+adoption bundles and left the full loop (`bundle.md` ->
+`behaviors/preceptor.yaml`, which sets no surface) still unable to reach it,
+while shipping the promise in that very session. A config knob whose value
+decides whether a person may delete data about themselves is the wrong shape
+regardless of its name, and it fails **silently by omission**: a composition
+that simply never sets the key loses the right with no error -- which
+`docs/CONSENT.md` already calls worse than having no control at all.
+
+There is no composition where "you may be recorded but may not delete" is
+correct. If the bundle records, deletion must work. If it does not record,
+`forget` is harmless because there is nothing to delete.
+
+### `surface`: schema narrowing, never authority
+
+`surface` selects **which operations an instance advertises in its JSON
+schema**. It is a token-cost knob, not a permission. The full set is 14
+operations, each with a name and description, and the tool schema is re-sent
+on every provider request -- a bundle whose only business with this tool is
+the recording-consent controls should not pay for `promote_cue` /
+`retire_cue` / `log_assessment` on every turn. Same always-on cost discipline
+as the 500-token context policy.
+
+```yaml
+# behaviors/preceptor-consent.yaml -- lean schema, no ledger-write authority
+tools:
+  - module: tool-preceptor
+    source: ../modules/tool-preceptor
+    config:
+      root: ~/.amplifier/projects/{project}/preceptor
+      surface: consent    # advertises status, observations, forget
+```
+
+| `surface` | Advertised | Notes |
+|---|---|---|
+| unset | all reads + `forget` (+ writes if `writable`) | `behaviors/preceptor.yaml`, `agents/*.md` |
+| `consent` | `status`, `observations`, `forget` | both adoption bundles |
+| anything else | -- | raises `ValueError` at construction |
+
+Narrowing never removes an operation the caller could otherwise reach:
+`execute()` re-checks `writable` for the ledger writes and checks nothing at
+all for reads and `forget`, regardless of what a given instance advertises.
+`_SURFACES` is **built** by unioning the subject-authority operations into
+every entry, so a surface that omits `forget` is unrepresentable rather than
+merely absent -- pinned by `test_every_surface_includes_forget`. An
+unrecognized `surface` raises loudly so a typo cannot silently change what
+the model is told the tool can do; it could never cost anyone their deletion
+right.
 
 ## Operations
 
@@ -87,7 +154,12 @@ matters (e.g. `exit_evidence`, `entry_evidence`, `origin`).
 | `pin_cue` | `provider`, `model`, `domain`, `cue_id` | Human override: marks a cue pinned |
 | `mute_cue` | `provider`, `model`, `domain`, `cue_id` | Human override: forces a cue to `shadowed` immediately, bypassing evidence gates. Does **not** touch `fade_attempts`/`shadow_restores` -- those counters measure the automated pipeline's trustworthiness, not an out-of-band human action |
 | `log_assessment` | `run`, `provider`, `model`, `domain`, `probes`, `verdict`, `n_per_arm`, `mean`, `variance` | `verdict` is one of `positive \| no-effect \| inconclusive` |
-| `forget` | `since` | Deletes observation records timestamped on/after `since` (ISO-8601); marks any cue whose **entire** origin set was removed as `unsupported`, which blocks promotion |
+
+### Subject authority (always available -- gated by nothing)
+
+| Operation | Required fields | Notes |
+|---|---|---|
+| `forget` | `since` | Deletes observation records timestamped on/after `since` (ISO-8601); marks any cue whose **entire** origin set was removed as `unsupported`, which blocks promotion. Reachable from **every** instance regardless of `writable` and `surface` -- see "`forget` is gated by nothing" above for why, and for the two gates that were tried and removed |
 
 An id that does not resolve (an `origin` entry, `entry_evidence`, or
 `exit_evidence`) is a hard failure, not a warning -- an unresolvable
@@ -189,7 +261,8 @@ by letting the failure hit the user.
 | Key | Default | Meaning |
 |---|---|---|
 | `root` | `~/.amplifier/projects/{project}/preceptor` | Ledger root directory. `{project}` is substituted from the session's working-directory capability when available, else `cwd()` |
-| `writable` | `false` | Whether write operations are permitted on this instance |
+| `writable` | `false` | Whether **ledger-write** operations are permitted on this instance. Does not affect `forget`, which is available regardless |
+| `surface` | `None` | Which operations this instance **advertises** in its JSON schema -- a token-cost knob, never a permission. Only `"consent"` is recognized (`status`, `observations`, `forget`); unset advertises all reads plus `forget`. An unrecognized value raises `ValueError` at construction. Every surface includes `forget` by construction |
 | `autonomous` | `false` | Whether `promote_cue`/`retire_cue` may apply automatically once earned |
 | `false_fade_ceiling` | `0.10` | Autonomy re-locks if `false_fade_rate` reaches this |
 | `min_fade_attempts` | `40` | Minimum shadow attempts before the false-fade rate is trusted |

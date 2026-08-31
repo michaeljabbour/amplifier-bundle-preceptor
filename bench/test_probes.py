@@ -675,3 +675,58 @@ def test_removal_burden_matrix_counts_are_pinned() -> None:
     embarrassment, and comments do not fail CI on their own."""
     assert len(REMOVAL_BURDEN_MUST_PASS) == 5
     assert len(REMOVAL_BURDEN_MUST_FAIL) == 4
+
+
+# ---------------------------------------------------------------------------
+# what-recorded: the question asks TWO things -- the yes/no privacy claim,
+# AND the command that shows what is recorded -- and `expect` used to grade
+# only the yes/no half. `must_not` (added for the round-3/round-4 subsystem
+# conflation defect, see AUDIT_CASES below) rejects wrong-subsystem commands,
+# but a bare "No." with no command at all was never rejected by anything: it
+# has no command, right or wrong, so `must_not` has nothing to catch. This
+# was DTU-verified reachable, 2 of 2 attempts requesting brevity.
+#
+# `expect` now requires BOTH the negative answer AND one of the two correct
+# recording-domain commands (`preceptor status` / `preceptor observations`)
+# in the same answer -- the affirmative-match principle from PR #1: require
+# the RIGHT control, don't enumerate every wrong or missing one.
+# ---------------------------------------------------------------------------
+
+WHAT_RECORDED_MUST_PASS = [
+    "No. Run `preceptor status` to see what's recorded.",
+    (
+        "No — Preceptor never records message text or file contents; check "
+        "`preceptor observations --mine` for exactly what's stored."
+    ),
+    "Never. Use `preceptor status`.",
+]
+
+WHAT_RECORDED_MUST_FAIL = [
+    # The DTU-verified reachable defect, 2 of 2 attempts requesting brevity:
+    # the correct privacy claim with NO command at all.
+    "No.",
+    "No, nothing like that.",
+    # The round-3 wrong-subsystem defect, still guarded by `must_not` -- kept
+    # here too so the matrix demonstrates the fix end-to-end, not just via
+    # the generic AUDIT_CASES construction below.
+    "No. Run `preceptor off`.",
+    # No clear negative-answer form at all.
+    "Nope, all good.",
+]
+
+
+@pytest.mark.parametrize("answer", WHAT_RECORDED_MUST_PASS)
+def test_what_recorded_accepts_negative_answer_with_correct_command(
+    answer: str,
+) -> None:
+    assert _scores(_probe("what-recorded"), answer), answer
+
+
+@pytest.mark.parametrize("answer", WHAT_RECORDED_MUST_FAIL)
+def test_what_recorded_rejects_missing_or_wrong_command(answer: str) -> None:
+    assert not _scores(_probe("what-recorded"), answer), answer
+
+
+def test_what_recorded_matrix_counts_are_pinned() -> None:
+    assert len(WHAT_RECORDED_MUST_PASS) == 3
+    assert len(WHAT_RECORDED_MUST_FAIL) == 4

@@ -77,7 +77,11 @@ HERE = Path(__file__).parent
 PROBES = json.loads((HERE / "probes" / "context-probes.json").read_text())["probes"]
 
 sys.path.insert(0, str(HERE))
-from probe_context import reduction_is_live, variant_covers_every_file
+from probe_context import (
+    classify_full_arm_failures,
+    reduction_is_live,
+    variant_covers_every_file,
+)
 
 
 def _probe(probe_id: str) -> dict:
@@ -563,6 +567,54 @@ def test_whole_file_removal_is_expressed_as_an_empty_fixture() -> None:
         )
         is None
     )
+
+
+def test_classify_full_arm_failures_flags_suspect_when_no_context_passes_where_full_fails() -> (
+    None
+):
+    """The exact structural signal from issue #3: `removal-burden` failed the
+    FULL arm while the no-context arm (strictly less informative) passed --
+    the signature of a broken instrument, not a content gap."""
+    probes = [{"id": "removal-burden"}, {"id": "stop-recording"}]
+    full_results = {
+        "removal-burden": [False, False, False],  # full context FAILS
+        "stop-recording": [True, True, True],
+    }
+    none_results = {
+        "removal-burden": [True, True, True],  # no-context PASSES anyway
+        "stop-recording": [False, False, False],
+    }
+    genuine_gap, suspect = classify_full_arm_failures(
+        probes, full_results, none_results
+    )
+    assert suspect == ["removal-burden"]
+    assert genuine_gap == []
+
+
+def test_classify_full_arm_failures_treats_agreement_as_a_genuine_gap() -> None:
+    """When BOTH arms fail a probe, that is the ordinary, honest case: the
+    context has a gap, not a broken instrument -- must not be flagged."""
+    probes = [{"id": "some-probe"}]
+    full_results = {"some-probe": [False, False]}
+    none_results = {"some-probe": [False, False]}
+    genuine_gap, suspect = classify_full_arm_failures(
+        probes, full_results, none_results
+    )
+    assert genuine_gap == ["some-probe"]
+    assert suspect == []
+
+
+def test_classify_full_arm_failures_ignores_probes_that_pass_full() -> None:
+    """Only full-arm FAILURES are classified at all -- a probe the full arm
+    passes is neither a gap nor a suspect instrument."""
+    probes = [{"id": "passing-probe"}]
+    full_results = {"passing-probe": [True, True]}
+    none_results = {"passing-probe": [True, True]}
+    genuine_gap, suspect = classify_full_arm_failures(
+        probes, full_results, none_results
+    )
+    assert genuine_gap == []
+    assert suspect == []
 
 
 def test_filename_set_is_checked_before_the_size_verdict() -> None:

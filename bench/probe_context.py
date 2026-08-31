@@ -189,6 +189,38 @@ def reduction_is_live(full_chars: int, reduced_chars: int) -> str | None:
     return None
 
 
+def classify_full_arm_failures(
+    probes: list[dict],
+    full_results: dict[str, list[bool]],
+    none_results: dict[str, list[bool]],
+) -> tuple[list[str], list[str]]:
+    """Split the probes the FULL arm fails into (genuine_gap, suspect_broken).
+
+    A probe the full-context arm fails is EITHER a genuine content gap (the
+    context truly doesn't carry this capability) OR a broken instrument (the
+    regex rejects a substantively correct answer) -- see issue #3:
+    `removal-burden`'s `expect` demanded rigid word-adjacency and scored two
+    DTU-verified CORRECT answers as FAIL, while the caller used to fold every
+    full-arm failure into one "inadmissible" bucket labeled "measures a gap,
+    not a loss" -- actively wrong about why THIS one failed.
+
+    Deterministic signal, no LLM judge (per this harness's own design): if
+    the NO-CONTEXT arm -- strictly LESS informative than full -- PASSES a
+    probe the FULL arm FAILS, that is structurally suspicious. It is not
+    proof of a broken regex (a probe could be answerable from general
+    knowledge and also just get unlucky in full), but a less-informed answer
+    scoring BETTER than a more-informed one on the same regex must never be
+    swept silently into "the context has a gap".
+
+    Returns (genuine_gap_ids, suspect_broken_instrument_ids), both drawn from
+    `probes` in their original order.
+    """
+    fails_full = [p["id"] for p in probes if not all(full_results[p["id"]])]
+    suspect = [pid for pid in fails_full if any(none_results[pid])]
+    genuine = [pid for pid in fails_full if pid not in suspect]
+    return genuine, suspect
+
+
 def run_arm(container: str, label: str, variant: dict[str, str], reps: int) -> dict:
     print(f"\n  arm: {label}")
     install_variant(container, variant)
@@ -267,27 +299,18 @@ def main() -> int:
     # ship: `removal-burden`'s `expect` demanded rigid word-adjacency and scored
     # two DTU-verified CORRECT answers as FAIL, and the old message here --
     # "measures a gap, not a loss" -- was actively wrong about why it failed.
-    #
-    # Deterministic signal, no LLM judge (per this harness's own design): if the
-    # NO-CONTEXT arm -- strictly LESS informative than full -- PASSES a probe
-    # that the FULL arm FAILS, that is structurally suspicious. It is not proof
-    # of a broken regex (a probe could be answerable from general knowledge and
-    # also just get unlucky in full), but a less-informed answer scoring BETTER
-    # than a more-informed one on the same regex must never be swept silently
-    # into "the context has a gap" -- it is surfaced loudly instead, and the
-    # run's accept/reject verdict is not trusted (see the exit-code 3 path
-    # below).
-    fails_full = [p for p in PROBES if p not in passes_full]
-    suspect_broken_instrument = [
-        p for p in fails_full if any(a_none["results"][p["id"]])
-    ]
-    genuine_gap = [p for p in fails_full if p not in suspect_broken_instrument]
-    inadmissible = [p["id"] for p in fails_full]
+    # See classify_full_arm_failures() for the deterministic signal used to
+    # split the two. The run's accept/reject verdict is not trusted when a
+    # suspect instrument fires (see the exit-code 3 path below).
+    genuine_gap, suspect_broken_instrument = classify_full_arm_failures(
+        PROBES, a_full["results"], a_none["results"]
+    )
+    inadmissible = genuine_gap + suspect_broken_instrument
 
     if suspect_broken_instrument:
         print(
             "\n  ** PROBE INSTRUMENT SUSPECT ** -- full context FAILS, no-context "
-            "PASSES: " + ", ".join(p["id"] for p in suspect_broken_instrument)
+            "PASSES: " + ", ".join(suspect_broken_instrument)
         )
         print(
             "    A less-informed answer scoring BETTER than a more-informed one "
@@ -299,7 +322,7 @@ def main() -> int:
     if genuine_gap:
         print(
             "  EXCLUDED (full context fails these, no-context arm fails them too "
-            "-- a genuine gap, not a loss): " + ", ".join(p["id"] for p in genuine_gap)
+            "-- a genuine gap, not a loss): " + ", ".join(genuine_gap)
         )
     if over:
         print(
@@ -379,10 +402,8 @@ def main() -> int:
                 "reduced": a_red,
                 "admissible": [p["id"] for p in admissible],
                 "inadmissible": inadmissible,
-                "genuine_gap": [p["id"] for p in genuine_gap],
-                "suspect_broken_instrument": [
-                    p["id"] for p in suspect_broken_instrument
-                ],
+                "genuine_gap": genuine_gap,
+                "suspect_broken_instrument": suspect_broken_instrument,
                 "lost": lost,
                 "chars_saved": saved,
                 "accept": accept,
@@ -395,7 +416,7 @@ def main() -> int:
     if suspect_broken_instrument:
         print(
             "\n  ABORT-AFTER-RUN -- probe instrument suspect for "
-            f"{', '.join(p['id'] for p in suspect_broken_instrument)} (see above). "
+            f"{', '.join(suspect_broken_instrument)} (see above). "
             "The accept/reject verdict above is NOT trusted until the probe is "
             "fixed or the suspicion is ruled out -- a probe that fails while its "
             "answers are correct must not be able to delete itself quietly."

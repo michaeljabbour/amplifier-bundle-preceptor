@@ -97,6 +97,14 @@ rate climbs.
 
 ## Quickstart
 
+> **Apple Silicon (aarch64):** if the CLI crashes during session init with exit code 132
+> and empty stderr, you have hit a known `cryptography` wheel SIGILL, not a bug in this
+> bundle -- `cryptography==50.0.1`'s aarch64 build crashes during `tool-mcp` import, before
+> any bundle-specific code runs. Pin the older release: `uv tool install -vv
+> git+https://github.com/microsoft/amplifier --with "cryptography==45.0.7"`. Setting
+> `PYTHONFAULTHANDLER=1` before reproducing surfaces a traceback rooted in
+> `cryptography/exceptions.py` if you want to confirm it yourself. See `AGENTS.md`.
+
 Start by watching. That is not ceremony — it is the thesis applied to the bundle's own
 rollout.
 

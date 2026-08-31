@@ -264,13 +264,50 @@ def _utcnow() -> str:
 
 
 def _parse_timestamp(value: str) -> datetime:
+    """Parse an ISO-8601 date/datetime, ALWAYS returning a timezone-aware value.
+
+    The localisation on the last line is the whole point. Without it, this
+    returned whatever `fromisoformat` produced -- aware for `...Z` and
+    `...+00:00`, NAIVE for a bare `2026-08-01` or `2026-08-01T00:00:00` --
+    and every naive result was a landmine, because Python refuses to compare
+    naive and aware datetimes at all:
+
+        TypeError: can't compare offset-naive and offset-aware datetimes
+
+    `forget()` is the one place that compares timestamps, and it compares a
+    user-supplied `since` against each record's `ts`. The observer writes
+    `ts` with `datetime.now(timezone.utc).isoformat()` -- always AWARE. So a
+    bare date crashed the operation outright, and a bare date is precisely
+    what `docs/CONSENT.md` documents: `preceptor forget --since <date>`.
+    The documented control did not work on the documented invocation.
+    Verified live: two of two natural asks ("delete everything from this
+    month onward") produced the TypeError, and only succeeded because the
+    model retried on its own initiative with an explicit `+00:00`.
+
+    Naive input is interpreted as UTC rather than as local time. That is the
+    correct reading here and not merely the convenient one: every timestamp
+    this module compares against was written in UTC (the observer's
+    `isoformat()` of an aware UTC value, and this module's own `_utcnow()`,
+    which emits a trailing `Z`). Interpreting a bare date as local time
+    would silently shift the deletion boundary by the operator's offset --
+    for a deletion boundary, deleting a few hours' more or fewer records
+    than the user asked for is the failure mode to avoid.
+
+    Because BOTH sides of that comparison come through this function, this
+    also closes the mirror-image bug that was never reported: an AWARE
+    `since` against a NAIVE record `ts`, which would have raised the same
+    TypeError if any writer ever emitted a naive timestamp.
+    """
     text = value.strip()
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(text)
+        parsed = datetime.fromisoformat(text)
     except ValueError as exc:
         raise LedgerError(f"{value!r} is not a valid ISO-8601 date/datetime.") from exc
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed
 
 
 def _iter_jsonl(path: Path):

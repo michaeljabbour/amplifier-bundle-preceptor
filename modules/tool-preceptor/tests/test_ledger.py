@@ -243,3 +243,116 @@ def test_atomic_write_no_partial_file(tmp_path):
 
     doc = yaml.safe_load(doc_path.read_text(encoding="utf-8"))
     assert doc["cues"][0]["text"] == "Text."
+
+
+# ---------------------------------------------------------------------------
+# forget(): every `since` form a user or model would plausibly type must
+# delete the SAME records.
+#
+# THE DEFECT THIS PINS. `_parse_timestamp` stripped a trailing `Z` but never
+# localised a naive parse, so `2026-08-01` came back naive while the
+# observer's records carry aware timestamps
+# (`datetime.now(timezone.utc).isoformat()`). Python refuses to compare the
+# two at all, so `forget` died with:
+#
+#     TypeError: can't compare offset-naive and offset-aware datetimes
+#
+# The bare date is not an edge case -- it is the form docs/CONSENT.md
+# DOCUMENTS: `preceptor forget --since <date>`. Verified live, two of two
+# natural asks ("delete everything from this month onward") hit it, and only
+# succeeded because the model retried unprompted with an explicit `+00:00`.
+#
+# WHY THIS ASSERTS ON COUNTS, NOT ON "NO EXCEPTION". A test that only
+# asserted `forget` does not raise would pass against a version that parses
+# every `since` to the same wrong instant and deletes nothing -- which is
+# indistinguishable from success when the store happens to be empty. Every
+# form must delete the same NON-ZERO count, and a control that must delete
+# nothing is included so the count is not trivially satisfied.
+# ---------------------------------------------------------------------------
+
+# All of these denote the same instant, 2026-08-01T00:00:00Z, except the
+# last, which is deliberately a NON-UTC offset denoting a different instant
+# that still lands before every record below.
+SINCE_FORMS_SAME_RESULT = [
+    "2026-08-01",  # THE DOCUMENTED FORM -- this is the one that crashed
+    "2026-08-01T00:00:00",  # naive datetime, no offset
+    "2026-08-01T00:00:00Z",  # the form the model retried with
+    "2026-08-01T00:00:00+00:00",  # explicit UTC offset
+    "2026-07-31T19:00:00-05:00",  # non-UTC offset == 2026-08-01T00:00:00Z
+]
+
+
+def _seed_observations_for_forget(root: Path) -> None:
+    """Three records after the boundary, one well before it.
+
+    The `before` record is what stops "deleted everything" from passing as
+    "deleted the right thing".
+    """
+    _write_observation(root, "obs-after-1", ts="2026-08-31T18:56:35.386345+00:00")
+    _write_observation(root, "obs-after-2", ts="2026-08-15T09:00:00+00:00")
+    _write_observation(root, "obs-after-3", ts="2026-08-01T00:00:00+00:00")
+    _write_observation(root, "obs-before", ts="2026-07-04T12:00:00+00:00")
+
+
+@pytest.mark.parametrize("since", SINCE_FORMS_SAME_RESULT)
+def test_forget_deletes_the_same_records_for_every_since_form(tmp_path, since):
+    root = tmp_path / "preceptor"
+    _seed_observations_for_forget(root)
+
+    result = ledger.forget(root, since)
+
+    assert result["deleted_observations"] == 3, (
+        f"since={since!r} deleted {result['deleted_observations']} records; "
+        "every equivalent form must delete the same three"
+    )
+
+    # And the pre-boundary record must survive, or the count above could be
+    # satisfied by deleting indiscriminately.
+    surviving = [
+        json.loads(line)
+        for line in (root / "observations" / "sess-test.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert [r["id"] for r in surviving] == ["obs-before"]
+
+
+def test_forget_with_a_bare_date_does_not_raise_on_aware_record_timestamps(tmp_path):
+    """The verbatim failure, isolated: bare date + the observer's own format.
+
+    Kept separate from the table above so the specific regression is
+    greppable by its error message rather than only by parameter id.
+    """
+    root = tmp_path / "preceptor"
+    _write_observation(root, "obs-1", ts="2026-08-31T18:56:35.386345+00:00")
+
+    result = ledger.forget(root, "2026-08-01")  # must not raise TypeError
+
+    assert result["deleted_observations"] == 1
+
+
+def test_forget_handles_naive_record_timestamps_too(tmp_path):
+    """The mirror-image direction, which was never reported but was equally
+    broken: an AWARE `since` against a NAIVE record `ts`.
+
+    Both sides of the comparison run through `_parse_timestamp`, so
+    localising there closes both directions at once. This pins that, rather
+    than leaving the untested half to be rediscovered if a writer ever emits
+    a naive timestamp.
+    """
+    root = tmp_path / "preceptor"
+    _write_observation(root, "obs-naive", ts="2026-08-31T18:56:35")
+
+    result = ledger.forget(root, "2026-08-01T00:00:00Z")
+
+    assert result["deleted_observations"] == 1
+
+
+def test_forget_rejects_an_unparseable_since(tmp_path):
+    """Localising must not turn a genuinely malformed input into silence."""
+    root = tmp_path / "preceptor"
+    _write_observation(root, "obs-1", ts="2026-08-31T18:56:35.386345+00:00")
+
+    with pytest.raises(ledger.LedgerError, match="not a valid ISO-8601"):
+        ledger.forget(root, "last Tuesday")

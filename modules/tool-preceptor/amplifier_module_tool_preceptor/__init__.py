@@ -7,6 +7,7 @@ reference, the read/write split, and the autonomy lock.
 
 from __future__ import annotations
 
+import copy
 import logging
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,18 @@ __amplifier_module_type__ = "tool"
 
 _DEFAULT_ROOT = "~/.amplifier/projects/{project}/preceptor"
 
+# MACHINE AUTHORITY. Every operation here mutates the SHARED cue ledger on
+# evidence of a measured effect, which is exactly the authority
+# `agents/credentialer.md` exists to hold and nothing else in the bundle
+# should. `writable: true` is the right gate for these.
+#
+# `forget` used to live here. That was a category error: `forget` deletes a
+# user's OWN observation records on THEIR OWN request -- SUBJECT authority,
+# authorized by the fact that the records are about them, not by any
+# measurement. The only shipped composition that ever sets `writable: true`
+# is credentialer, so folding the two together meant the deletion right
+# docs/CONSENT.md promises in every session could only be reached by also
+# handing out full cue-lifecycle authority. See `_SUBJECT_OPERATIONS` below.
 _WRITE_OPERATIONS = frozenset(
     {
         "propose_cue",
@@ -31,7 +44,6 @@ _WRITE_OPERATIONS = frozenset(
         "pin_cue",
         "mute_cue",
         "log_assessment",
-        "forget",
     }
 )
 
@@ -86,6 +98,69 @@ _MISSING_FIELD_HINTS: dict[str, str] = {
 # Fields where 0 (or an empty-looking-but-valid value) is legitimate, not "missing".
 _NUMERIC_FIELDS = frozenset({"n_per_arm", "mean", "variance", "limit"})
 _LIST_FIELDS = frozenset({"origin", "probes"})
+
+# SUBJECT AUTHORITY -- UNCONDITIONALLY AVAILABLE ON EVERY INSTANCE.
+#
+# `forget` deletes a user's own observation records because they asked. What
+# authorizes it is that the records are ABOUT THEM; no measurement, no
+# credential, and no operator decision is involved. So it is gated by nothing:
+# not `writable`, not `surface`, not any future config key.
+#
+# That is a correction of a correction, and both errors are worth recording
+# because they were the SAME error. `forget` first sat in _WRITE_OPERATIONS
+# behind `writable: true` -- held only by credentialer, so the deletion right
+# was unreachable from every shipped session. The first fix moved it behind a
+# NEW key, `surface: "consent"`, which fixed the two adoption bundles and left
+# the full loop (bundle.md -> behaviors/preceptor.yaml, which sets no surface)
+# still unable to reach it -- while shipping context/awareness.md's promise of
+# `preceptor forget --since <date>` in that very session. A config knob whose
+# value decides whether a person may delete their own data is the wrong shape
+# no matter what it is called, and it fails silently by omission: a
+# composition that simply does not set the key loses the right with no error,
+# which docs/CONSENT.md already says is worse than having no control at all.
+#
+# There is no composition where "you may be recorded but may not delete" is
+# the right answer. If the bundle records, deletion must work. If it does not
+# record, `forget` is harmless -- there is nothing to delete. Hence
+# unconditional BY CONSTRUCTION, so no composition can lose it by omission.
+_SUBJECT_OPERATIONS = frozenset({"forget"})
+
+# Reads are always available too. Derived, not hand-maintained, so it cannot
+# drift out of sync as operations are added or reclassified.
+_READ_OPERATIONS = frozenset(_REQUIRED_FIELDS) - _WRITE_OPERATIONS - _SUBJECT_OPERATIONS
+
+# `surface` is SCHEMA NARROWING -- a token-cost and ergonomics knob, NEVER an
+# authority gate. The full operation set is 14 entries, each with a name and a
+# description, and the tool schema is re-sent on every provider request; a
+# bundle whose only business with this tool is the recording-consent controls
+# should not pay for `promote_cue`/`retire_cue`/`log_assessment` on every turn.
+# This repo budgets always-on cost carefully everywhere else (the 500-token
+# context policy, `bundle.md` refusing to restate what context files carry) --
+# this is the same discipline applied to the tool surface.
+#
+# Because it is not an authority gate, narrowing NEVER removes an operation
+# the caller could otherwise reach: execute() re-checks `writable` for the
+# ledger writes and checks nothing at all for reads and `forget`, regardless
+# of what a given instance's schema advertises.
+#
+# _SURFACES is BUILT from _SURFACE_READS by unioning _SUBJECT_OPERATIONS into
+# every entry, so a surface that omits `forget` is not something you can write
+# by mistake -- it is unrepresentable. Pinned by
+# test_every_surface_includes_forget.
+_SURFACE_READS: dict[str, frozenset[str]] = {
+    # The recording-consent domain, matching context/awareness.md's table:
+    #   | What is being recorded? | `preceptor status`              |
+    #   | Show my records         | `preceptor observations --mine` |
+    #   | Delete records          | `preceptor forget --since ...`  |  <- _SUBJECT
+    # Deliberately excludes the DOSING controls (`cues`, `why`) and the
+    # ledger internals (`read_profile`): the adoption bundles that use this
+    # surface compose no injector and no ledger writer at all.
+    "consent": frozenset({"status", "observations"}),
+}
+
+_SURFACES: dict[str, frozenset[str]] = {
+    name: reads | _SUBJECT_OPERATIONS for name, reads in _SURFACE_READS.items()
+}
 
 _INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -156,6 +231,28 @@ _INPUT_SCHEMA: dict[str, Any] = {
 }
 
 
+def _build_input_schema(allowed_operations: frozenset[str]) -> dict[str, Any]:
+    """Return a fresh, instance-scoped copy of `_INPUT_SCHEMA`.
+
+    Never return (or mutate) `_INPUT_SCHEMA` itself. Multiple `PreceptorTool`
+    instances with different `writable`/`surface` configs coexist in the same
+    process routinely -- every test module in this package does it, and a
+    real deployment does too (the general session's read-only instance
+    alongside credentialer's write-mounted one). `_INPUT_SCHEMA` is a nested,
+    mutable dict; a property that returned it directly, or shallow-copied
+    only the top level, would let one instance's schema silently corrupt
+    every other instance's `operation` enum, including one already handed to
+    a provider.
+
+    The `operation` enum is narrowed to what THIS instance can actually do --
+    a hint to the calling model, not a security boundary. execute() re-checks
+    every gate regardless of what an instance's schema advertises.
+    """
+    schema = copy.deepcopy(_INPUT_SCHEMA)
+    schema["properties"]["operation"]["enum"] = sorted(allowed_operations)
+    return schema
+
+
 def _get_capability_safe(coordinator: Any, name: str) -> Any:
     if coordinator is None:
         return None
@@ -168,13 +265,49 @@ def _get_capability_safe(coordinator: Any, name: str) -> Any:
         return None
 
 
-def _project_slug(coordinator: Any) -> str | None:
+def _project_slug(coordinator: Any) -> str:
+    """Derive the `{project}` slug from the session working directory.
+
+    THIS FUNCTION IS DUPLICATED VERBATIM IN THREE MODULES and must stay
+    byte-identical in all of them:
+
+        modules/tool-preceptor/.../__init__.py        (here)
+        modules/hooks-trajectory-observer/.../__init__.py
+        modules/hooks-cue-injector/.../__init__.py
+
+    The duplication is deliberate -- AGENTS.md requires flat, independent
+    modules with no cross-imports -- so the agreement is enforced by
+    `tests/test_project_slug_agreement.py` at the repo root, which loads all
+    three and asserts they return the same slug for the same input. Change
+    one, change all three, or that test fails.
+
+    WHY IT MATTERS: these three modules must resolve `{project}` in
+    `~/.amplifier/projects/{project}/preceptor` to the SAME directory. They
+    did not. The observer WROTE to `.../projects/project/preceptor` while
+    this tool READ from `.../projects/-root-project/preceptor`, and the
+    injector used a third form again (`root-project`). Measured live in a
+    Digital Twin: 17 observation records on disk, `observations` reporting
+    `total_observations: 0`, and `forget` returning success having deleted
+    nothing. A privacy control that reports success while touching the wrong
+    directory is worse than one that plainly does not exist.
+
+    WHY THE DASHED FORM, not `Path(working_dir).name`:
+
+      1. Amplifier core already uses it. `/root/.amplifier/projects/
+         -root-project/` exists in a live container as core's own session
+         directory, so this convention is the ecosystem's, not ours.
+      2. `.name` COLLIDES. `/home/alice/project` and `/home/bob/project`
+         both yield `project`, so two unrelated checkouts would share one
+         observation store and one ledger -- meaning one person's records
+         are readable, and deletable, from the other's session. For a store
+         holding per-session behavioural records that is a defect, not an
+         inconvenience.
+    """
     working_dir = _get_capability_safe(coordinator, "session.working_dir")
     if not working_dir:
-        return None
-    text = str(working_dir)
-    slug = text.replace("/", "-").replace("\\", "-").replace(":", "")
-    return slug or None
+        return "default"
+    slug = str(working_dir).replace("\\", "-").replace("/", "-").replace(":", "")
+    return slug or "default"
 
 
 def _working_dir(coordinator: Any) -> Path:
@@ -216,6 +349,32 @@ class PreceptorTool:
         self._max_active_cues = int(config.get("max_active_cues", 8))
         self._max_cue_chars = int(config.get("max_cue_chars", 200))
 
+        # `surface` selects WHICH operations this instance advertises in its
+        # JSON schema. It never decides what the instance may DO -- see
+        # _SURFACES. Every branch below includes _SUBJECT_OPERATIONS, and
+        # execute() does not consult `surface` at all.
+        surface: str | None = config.get("surface")
+        self._surface = surface
+        if surface is None:
+            advertised = _READ_OPERATIONS | _SUBJECT_OPERATIONS
+        elif surface in _SURFACES:
+            advertised = _SURFACES[surface]
+        else:
+            valid = ", ".join(sorted(_SURFACES))
+            raise ValueError(
+                f"Unknown surface {surface!r} for tool-preceptor. Valid "
+                f"surfaces: {valid}. An unrecognized surface fails LOUDLY at "
+                "mount time rather than silently falling back to some other "
+                "operation set -- a typo would otherwise change what the "
+                "model is told this tool can do, with no error anywhere. "
+                "(It could never cost a user their deletion right: `forget` "
+                "is unconditional and is in every surface by construction.)"
+            )
+
+        if self._writable:
+            advertised = advertised | _WRITE_OPERATIONS
+        self._schema = _build_input_schema(frozenset(advertised))
+
         project_slug = _project_slug(coordinator)
         self._root = ledger.resolve_root(
             config.get("root", _DEFAULT_ROOT), project_slug
@@ -228,17 +387,47 @@ class PreceptorTool:
 
     @property
     def description(self) -> str:
+        # Branched so the model is told what THIS instance advertises, not an
+        # aspirational full command list -- same principle _build_input_schema
+        # applies to the schema's `operation` enum. EVERY branch states that
+        # deleting your own records works, because on every branch it does.
+        if self._writable:
+            return (
+                "Read and mutate the preceptor evidence-gated cue ledger: propose, "
+                "promote, shadow, retire, restore, pin, or mute per-model/domain "
+                "instruction cues based on measured evidence, log assessments, and "
+                "delete a user's own recorded observations on request (forget). "
+                "This instance holds full ledger-write access (writable: true)."
+            )
+        if self._surface == "consent":
+            return (
+                "Preceptor recording controls: show what is being recorded "
+                "(status), summarize the observation records collected about the "
+                "user (observations), and delete those records on request "
+                "(forget). Cue-ledger operations are not exposed on this "
+                "instance."
+            )
         return (
-            "Read and (when writable) mutate the preceptor evidence-gated cue ledger: "
-            "per-model/domain instruction cues that are proposed, promoted, shadowed, "
-            "retired, or restored based on measured evidence, never on judgment alone. "
-            "Reads are always available; writes require the credentialer agent's "
-            "write-mounted instance."
+            "Read the preceptor evidence-gated cue ledger: per-model/domain "
+            "instruction cues that are proposed, promoted, shadowed, retired, "
+            "or restored based on measured evidence, never on judgment alone. "
+            "Deleting the user's own recorded observations (forget) is always "
+            "available. Ledger WRITES require the credentialer agent's "
+            "write-mounted instance (writable: true) -- this instance has "
+            "read access only."
         )
 
     @property
     def input_schema(self) -> dict[str, Any]:
-        return _INPUT_SCHEMA
+        return self._schema
+
+    @property
+    def writable(self) -> bool:
+        return self._writable
+
+    @property
+    def surface(self) -> str | None:
+        return self._surface
 
     @property
     def _autonomy_cfg(self) -> dict[str, Any]:
@@ -289,6 +478,16 @@ class PreceptorTool:
                     },
                 )
 
+            # NOTHING GATES _SUBJECT_OPERATIONS, AND NOTHING MAY. There is no
+            # second check here on purpose -- not on `surface`, not on
+            # `writable`, not on a future key. A person's right to delete
+            # records about themselves is not an operator's setting, and a
+            # gate on it fails silently by omission: a composition that just
+            # never sets the key loses the right with no error. Two gates
+            # have already been tried and removed for exactly that reason
+            # (`writable`, then `surface`); see _SUBJECT_OPERATIONS above for
+            # both, and test_forget_is_gated_by_neither_writable_nor_surface,
+            # which fails if a third one appears.
             return await self._dispatch(operation, input)
         except ledger.LedgerError as exc:
             return ToolResult(success=False, error={"message": str(exc)})
@@ -465,4 +664,13 @@ async def mount(
     config = config or {}
     tool = PreceptorTool(coordinator, config)
     await coordinator.mount("tools", tool, name=tool.name)  # REQUIRED
-    return {"name": "tool-preceptor", "version": "0.1.0", "provides": ["preceptor"]}
+    return {
+        "name": "tool-preceptor",
+        "version": "0.1.0",
+        "provides": ["preceptor"],
+        # `writable` is the ledger-write authority this instance holds;
+        # `surface` is only which operation set it advertises. Neither
+        # affects `forget`, which every instance can execute.
+        "writable": tool.writable,
+        "surface": tool.surface,
+    }

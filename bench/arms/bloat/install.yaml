@@ -7,7 +7,9 @@
 requires:
   env: [ANTHROPIC_API_KEY]
 setup_cmds:
-  - uv tool install -vv git+https://github.com/microsoft/amplifier
+  # cryptography 50.0.1 SIGILLs on aarch64 during tool-mcp import (exit 132).
+  # See AGENTS.md ("Known install blocker: cryptography on aarch64").
+  - uv tool install -vv git+https://github.com/microsoft/amplifier --with "cryptography==45.0.7"
   - amplifier bundle add git+https://github.com/microsoft/amplifier-foundation@main --app
   - amplifier bundle add 'git+https://github.com/michaeljabbour/amplifier-bundle-preceptor@main' --app
   # Bloat instruction set staged at seed time.

@@ -46,6 +46,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).parent))
 from climb import Measurement, Mutation, decide
@@ -189,6 +190,107 @@ def reduction_is_live(full_chars: int, reduced_chars: int) -> str | None:
     return None
 
 
+class FailureClassification(NamedTuple):
+    """How each full-arm failure was accounted for.
+
+    `declared_gap` is the only bucket that may be excluded silently.
+    """
+
+    declared_gap: list[str]
+    unresolved: list[str]
+    suspect_broken_instrument: list[str]
+
+
+def annotate_verdict(verdict: str, untrustworthy: list[str]) -> str:
+    """Mark a verdict line as untrustworthy, in place, when it is.
+
+    THE PROBLEM THIS SOLVES. `accept` and `trust` are computed
+    INDEPENDENTLY, and deliberately stay that way -- collapsing them would
+    lose the ability to say "the statistics said accept, and you should not
+    believe them", which is more useful than a merged verdict. But that
+    independence meant the loudest line in the output was the one that
+    should not be acted on: a bare `ACCEPTED` printed above a `VERDICT NOT
+    TRUSTED` banner, so a skimmer -- or anything tailing the output -- saw
+    `ACCEPTED` first and stopped. Exit code 3 and `verdict_trustworthy:
+    false` in the results JSON were already correct; the human-facing line
+    was not.
+
+    That is this harness's own subject matter turned on itself: an
+    instrument reading as fine while being wrong. So the annotation goes on
+    the verdict line itself rather than reordering the output.
+
+    Returns the verdict unchanged when nothing is untrustworthy -- the
+    annotation must be a real signal, not decoration that appears on every
+    run and stops being read.
+    """
+    if not untrustworthy:
+        return verdict
+    return f"{verdict} (NOT TRUSTED — see below)"
+
+
+def classify_full_arm_failures(
+    probes: list[dict],
+    full_results: dict[str, list[bool]],
+    none_results: dict[str, list[bool]],
+) -> FailureClassification:
+    """Account for every probe the FULL arm fails. Nothing is excluded silently.
+
+    A probe the full-context arm fails is EITHER a genuine content gap (the
+    context truly does not carry this capability) OR a broken instrument (the
+    regex rejects substantively correct answers). Those are not the same
+    finding, and the original code folded both into one silent
+    "inadmissible" bucket labelled "measures a gap, not a loss" -- which for
+    a broken probe is an actively false explanation.
+
+    THE FIRST FIX FOR THAT WAS ALSO WRONG, AND ITS FAILURE IS WHY THIS IS
+    NOW THREE BUCKETS. It flagged a probe only when the NO-CONTEXT arm
+    PASSED one the full arm failed. That signal is real but its precondition
+    is narrow: it requires the probe to be answerable without the context at
+    all. `main`'s `removal-burden` regex was broken badly enough to reject
+    correct answers in BOTH arms, so the discriminator never engaged and the
+    broken instrument was still laundered into "a genuine gap" -- the real
+    harness printed exactly that and exited 0. The guard was unit-tested
+    against a synthetic probe whose no-context arm passed, which is the only
+    case it could detect.
+
+    So the buckets are now:
+
+      suspect_broken_instrument
+          The no-context arm PASSES a probe the full arm FAILS. A
+          less-informed answer scoring BETTER than a more-informed one on
+          the same regex is the strongest available signal of a broken
+          regex. Loud.
+
+      unresolved
+          BOTH arms fail and the probe is not declared. There is NO
+          deterministic signal that separates "genuine gap" from "broken
+          regex" here -- so the harness does not guess. It reports the
+          probe as unaccounted-for and refuses to treat the run's verdict
+          as trustworthy. This is the bucket `main`'s broken regex belongs
+          in, and the one that did not exist.
+
+      declared_gap
+          The probe carries `"known_gap": true` in
+          probes/context-probes.json. A human looked at the full arm's
+          actual answers and recorded that the context genuinely does not
+          carry this. Exclusion becomes a DECLARATION in a reviewable file
+          rather than an inference the harness makes on the run's behalf --
+          which is the only version of "exclude this probe" that cannot
+          hide a broken instrument.
+
+    No LLM judge anywhere, per this harness's own design.
+    """
+    fails_full = [p["id"] for p in probes if not all(full_results[p["id"]])]
+    declared = {p["id"] for p in probes if p.get("known_gap")}
+
+    suspect = [pid for pid in fails_full if any(none_results[pid])]
+    declared_gap = [pid for pid in fails_full if pid in declared and pid not in suspect]
+    unresolved = [
+        pid for pid in fails_full if pid not in suspect and pid not in declared_gap
+    ]
+    return FailureClassification(declared_gap, unresolved, suspect)
+
+
 def run_arm(container: str, label: str, variant: dict[str, str], reps: int) -> dict:
     print(f"\n  arm: {label}")
     install_variant(container, variant)
@@ -259,12 +361,54 @@ def main() -> int:
     # Preceptor context present at all.
     over = [p for p in passes_full if any(a_none["results"][p["id"]])]
     admissible = [p for p in passes_full if p not in over]
-    inadmissible = [p["id"] for p in PROBES if p not in passes_full]
-    if inadmissible:
+
+    # Every full-arm failure must be ACCOUNTED FOR -- see
+    # classify_full_arm_failures(). Only a probe explicitly declaring
+    # `"known_gap": true` may leave the denominator quietly; everything else
+    # is either a suspected broken instrument or unresolved, and both make
+    # the verdict below untrustworthy (exit code 3).
+    classified = classify_full_arm_failures(
+        PROBES, a_full["results"], a_none["results"]
+    )
+    inadmissible = (
+        classified.declared_gap
+        + classified.unresolved
+        + classified.suspect_broken_instrument
+    )
+    untrustworthy = classified.unresolved + classified.suspect_broken_instrument
+
+    if classified.suspect_broken_instrument:
         print(
-            f"  EXCLUDED (full context already fails these): {', '.join(inadmissible)}"
+            "\n  ** PROBE INSTRUMENT SUSPECT ** -- full context FAILS, no-context "
+            "PASSES: " + ", ".join(classified.suspect_broken_instrument)
         )
-        print("  A probe the full context fails measures a gap, not a loss.")
+        print(
+            "    A less-informed answer scoring BETTER than a more-informed one "
+            "on the same regex is the signature of a broken regex, not a content "
+            "gap. Read the actual FULL-arm answers in the results file before "
+            "trusting anything below."
+        )
+    if classified.unresolved:
+        print(
+            "\n  ** UNRESOLVED ** -- both arms fail, probe not declared a known "
+            "gap: " + ", ".join(classified.unresolved)
+        )
+        print(
+            "    NOTHING HERE DISTINGUISHES 'the context genuinely does not "
+            "carry this' from 'the regex rejects correct answers'. Both arms "
+            "failing is exactly what a badly-broken regex looks like -- it is "
+            "what main's removal-burden did, scoring 0/5 against five correct "
+            "answers -- so this harness does not guess. READ THE FULL-ARM "
+            "ANSWERS. If they are correct, the probe is broken. If the context "
+            'really is silent on this, add "known_gap": true with a reason to '
+            "probes/context-probes.json and the exclusion becomes reviewable."
+        )
+    if classified.declared_gap:
+        print(
+            '  EXCLUDED (declared "known_gap": true -- a human read the answers '
+            "and recorded that the context does not carry this): "
+            + ", ".join(classified.declared_gap)
+        )
     if over:
         print(
             f"  OVER-DETERMINED (no-context arm passes): "
@@ -315,7 +459,11 @@ def main() -> int:
 
     if not admissible:
         accept = False
-        print("\n  REJECT -- no admissible probes; the ablation proves nothing.")
+        print(
+            "\n  "
+            + annotate_verdict("REJECT", untrustworthy)
+            + " -- no admissible probes; the ablation proves nothing."
+        )
     else:
         d = decide(
             Mutation(
@@ -328,7 +476,7 @@ def main() -> int:
             ni_margin=0.10,
         )
         accept = d.outcome == "accepted"
-        print(f"\n  {d.outcome.upper()} -- {d.reason}")
+        print(f"\n  {annotate_verdict(d.outcome.upper(), untrustworthy)} -- {d.reason}")
         if lost:
             print(f"  (scored lower, not necessarily significantly: {', '.join(lost)})")
 
@@ -343,14 +491,32 @@ def main() -> int:
                 "reduced": a_red,
                 "admissible": [p["id"] for p in admissible],
                 "inadmissible": inadmissible,
+                "declared_gap": classified.declared_gap,
+                "unresolved": classified.unresolved,
+                "suspect_broken_instrument": classified.suspect_broken_instrument,
                 "lost": lost,
                 "chars_saved": saved,
                 "accept": accept,
+                # False whenever any full-arm failure was neither declared nor
+                # explained. Read this BEFORE `accept`.
+                "verdict_trustworthy": not untrustworthy,
             },
             indent=2,
         )
     )
     print(f"\n  wrote {out}")
+
+    if untrustworthy:
+        print(
+            "\n  VERDICT NOT TRUSTED -- unaccounted-for full-arm failures: "
+            f"{', '.join(untrustworthy)}. "
+            "A probe that fails while its answers are correct must not be able "
+            "to delete itself from the denominator quietly, and this harness "
+            "cannot tell that case apart from a real gap on its own. Read the "
+            "full-arm answers, then either fix the probe or declare the gap."
+        )
+        return 3
+
     return 0 if accept else 1
 
 

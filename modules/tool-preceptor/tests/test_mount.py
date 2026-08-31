@@ -46,6 +46,15 @@ async def test_tool_has_required_properties():
 
 
 async def test_readonly_refuses_writes(tmp_path):
+    """Every LEDGER-WRITE operation is refused without `writable: true`.
+
+    `forget` is deliberately NOT in this list, and used to be. It deletes a
+    user's own observation records on their own request -- subject authority,
+    not the machine authority `writable` gates -- and it is now unconditional.
+    See tests/test_consent_surface.py, whose
+    test_forget_is_gated_by_neither_writable_nor_surface carries the full
+    argument and the two gates that were tried and removed.
+    """
     coordinator = _FakeCoordinator()
     tool = PreceptorTool(coordinator, {"root": str(tmp_path), "writable": False})
 
@@ -114,7 +123,6 @@ async def test_readonly_refuses_writes(tmp_path):
             "mean": 0.1,
             "variance": 0.01,
         },
-        {"operation": "forget", "since": "2026-01-01T00:00:00Z"},
     ]
 
     for op in write_ops:

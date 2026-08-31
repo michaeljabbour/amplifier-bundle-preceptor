@@ -8,6 +8,12 @@ bundle:
     run boundaries. No message text, no file contents, no free-text field. Local,
     90-day retention, readable and deletable by you. Read docs/CONSENT.md first.
 
+    "Readable and deletable by you" is made real by the tool mount below --
+    `preceptor status` / `preceptor observations --mine` / `preceptor forget`
+    all run here. It carries the lean recording-consent schema and no
+    ledger-write authority: it cannot propose, promote, retire, or dose a
+    cue, which stays with `preceptor:credentialer` in the full bundle.
+
 includes:
   - bundle: git+https://github.com/microsoft/amplifier-foundation@main
   # The -on behavior, NOT preceptor-observer (which ships enabled: false).
@@ -19,3 +25,8 @@ includes:
   # of the disabled behavior's keys and none of the override's. Exactly one
   # declaration of hooks-trajectory-observer per composition.
   - bundle: preceptor:behaviors/preceptor-observer-on
+  # tool-preceptor, consent surface only (surface: consent) -- a DIFFERENT
+  # module declaration than behaviors/preceptor.yaml's read-only mount, and
+  # this bundle never includes that behavior, so there is no double
+  # declaration here. See behaviors/preceptor-consent.yaml.
+  - bundle: preceptor:behaviors/preceptor-consent

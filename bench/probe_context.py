@@ -115,6 +115,57 @@ def ask(container: str, question: str) -> str:
         return out.strip()
 
 
+def variant_covers_every_file(
+    full: dict[str, str], reduced: dict[str, str]
+) -> str | None:
+    """Return an abort message if the arms disagree on FILENAMES, else None.
+
+    `install_variant()` writes only the keys the variant dict actually
+    contains. It cannot express "this file should not exist" -- there is no
+    delete. And the full arm runs immediately before the reduced arm, into the
+    same container cache.
+
+    So a candidate that expresses "remove this whole context file" by DELETING
+    its fixture (the reduced dict is built by globbing the fixture dir) is a
+    phantom experiment:
+
+      - the reduced arm never writes that filename
+      - the file survives in the cache with its FULL contents, left there by
+        the preceding full arm
+      - the reduced arm therefore MEASURES the full file
+      - but a_red["chars"] excludes it entirely, so the aggregate looks
+        smaller and reduction_is_live() is satisfied
+
+    A whole-file removal would be scored ACCEPTED having never once been
+    tested. Checking filename SETS is the only thing that catches it; no size
+    comparison can, because the size comparison is computed from the very dict
+    that is missing the key.
+
+    The no-context arm is immune by construction -- `dict.fromkeys(full, "")`
+    keeps every key and explicitly empties it. That is also the supported way
+    to express a whole-file removal here: an EMPTY fixture file, never a
+    missing one.
+    """
+    missing = sorted(set(full) - set(reduced))
+    unexpected = sorted(set(reduced) - set(full))
+    if not missing and not unexpected:
+        return None
+    parts = []
+    if missing:
+        parts.append(f"missing from `reduced`: {', '.join(missing)}")
+    if unexpected:
+        parts.append(f"not present in `full`: {', '.join(unexpected)}")
+    return (
+        f"arm filename sets differ ({'; '.join(parts)}). install_variant() "
+        "writes only the filenames it is given and cannot delete, so a file "
+        "absent from `reduced` survives in the container cache at FULL size "
+        "from the preceding full arm -- the reduced arm would measure the "
+        "full file while its char count excluded it, scoring an untested "
+        "removal as accepted. Express removing an entire context file as an "
+        "EMPTY fixture file, never a missing one."
+    )
+
+
 def reduction_is_live(full_chars: int, reduced_chars: int) -> str | None:
     """Return an abort message if there is no live reduction candidate, else None.
 
@@ -182,7 +233,12 @@ def main() -> int:
     print(f"  full     {full_chars:>5}c  ~{full_chars // 4} tok")
     print(f"  reduced  {reduced_chars:>5}c  ~{reduced_chars // 4} tok")
 
-    abort = reduction_is_live(full_chars, reduced_chars)
+    # Filename sets first: a wrong file set must be reported before any size
+    # verdict, because the size verdict is computed from the very dict that is
+    # missing the key and would look perfectly healthy.
+    abort = variant_covers_every_file(full, reduced) or reduction_is_live(
+        full_chars, reduced_chars
+    )
     if abort:
         print(f"\n  ABORT -- {abort}", file=sys.stderr)
         return 2

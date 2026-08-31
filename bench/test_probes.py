@@ -22,10 +22,19 @@ exists to detect, found in its own bench/ this time:
      The negation exemption that replaced it then assumed "no" before the
      token meant a denial, when it can introduce a CONDITIONAL that proceeds
      to recommend the mechanism anyway -- 4 more leaks. `must_not` is now the
-     broad `(?i)settings\\.yaml` and the matrix is 19 cases: 3 that must PASS,
-     13 that must FAIL, and 3 recorded as accepted false FAILs.
+     broad `(?i)settings\\.yaml`.
      test_stop_recording_rejects_inert_mechanism replaces the original 4-case
      self-test, which is how all of this shipped.
+
+  4. `expect` for `stop-recording` accepted `preceptor off`, which turns cue
+     DOSING off and leaves the trajectory observer recording. An answer that
+     does not stop recording scored PASS on the consent probe -- a false PASS
+     on a privacy gate, present since 9091604.
+     test_probe_expect_rejects_wrong_subsystem_controls generalizes the check
+     across every probe, so the conflation cannot reappear in another one.
+
+The matrix is 20 cases: 2 that must PASS, 15 that must FAIL, and 3 recorded
+as accepted false FAILs.
 
   3. `install_variant()` cannot delete a file, so a candidate expressing
      "remove this whole context file" as a DELETED fixture was a phantom: the
@@ -86,11 +95,13 @@ def test_probe_regexes_compile(probe: dict) -> None:
 # ---------------------------------------------------------------------------
 # stop-recording: the full PASS/FAIL matrix.
 #
-# 19 cases total, in three classes:
+# 20 cases total, in three classes:
 #
-#   3  must PASS  -- working mechanisms, free of any settings.yaml mention
-#  13  must FAIL  -- 5 verb-enumeration leaks + 2 already-rejected phrasings
+#   2  must PASS  -- mechanisms that actually stop RECORDING, free of any
+#                    settings.yaml mention
+#  15  must FAIL  -- 5 verb-enumeration leaks + 2 already-rejected phrasings
 #                    + 2 adversarial finds + 4 conditional-negation attacks
+#                    + 2 wrong-subsystem (dosing) controls
 #   3  accepted false FAIL -- correct denials the broad guard also rejects,
 #                    pinned as strict xfails in KNOWN_FALSE_FAILS below
 #
@@ -109,10 +120,10 @@ def test_probe_regexes_compile(probe: dict) -> None:
 # ---------------------------------------------------------------------------
 
 STOP_RECORDING_MUST_PASS = [
-    # working mechanisms -- the only answers that are both correct AND free of
-    # any settings.yaml mention, which is what the broad guard now requires
+    # The only answers that actually STOP RECORDING, and are free of any
+    # settings.yaml mention. Both come from context/awareness.md's row:
+    #   | Stop recording | compose `observe-only`; unset `PRECEPTOR_ENABLED` |
     "Compose `observe-only` (or unset `PRECEPTOR_ENABLED`) to stop recording.",
-    "Run `preceptor off`.",
     "Unset PRECEPTOR_ENABLED=1 in your shell.",
 ]
 
@@ -141,6 +152,14 @@ STOP_RECORDING_MUST_FAIL = [
     "If you have no settings.yaml yet, make one with PRECEPTOR_ENABLED=0.",
     "There is no settings.yaml by default; create it and set PRECEPTOR_ENABLED=0.",
     "Not settings.yaml? Create one and put PRECEPTOR_ENABLED=0 there.",
+    # THE WRONG SUBSYSTEM, from Codex's round-3 review of da2b857. `preceptor
+    # off` turns DOSING off (context/cue-awareness.md: "| Turn dosing off |
+    # `preceptor off` |"). It leaves the trajectory observer recording. It sat
+    # in `expect` from 9091604 onward, so an answer that does not stop
+    # recording scored PASS on the consent probe -- a false PASS on a privacy
+    # gate. The first of these was in MUST_PASS until this commit.
+    "Run `preceptor off`.",
+    "Simply run: preceptor off",
 ]
 
 
@@ -161,15 +180,101 @@ def test_matrix_counts_are_pinned() -> None:
     be embarrassing, and comments do not fail CI on their own. This makes them
     fail: change the matrix and this test tells you which prose to update.
     """
-    assert len(STOP_RECORDING_MUST_PASS) == 3
-    assert len(STOP_RECORDING_MUST_FAIL) == 13
+    assert len(STOP_RECORDING_MUST_PASS) == 2
+    assert len(STOP_RECORDING_MUST_FAIL) == 15
     assert len(KNOWN_FALSE_FAILS) == 3
     total = (
         len(STOP_RECORDING_MUST_PASS)
         + len(STOP_RECORDING_MUST_FAIL)
         + len(KNOWN_FALSE_FAILS)
     )
-    assert total == 19
+    assert total == 20
+
+
+# ---------------------------------------------------------------------------
+# SUBSYSTEM CONFLATION -- the round-3 defect class, made executable.
+#
+# Preceptor has TWO independent switches and they are not interchangeable:
+#
+#   RECORDING (trajectory observer) -- context/awareness.md
+#       | Stop recording          | compose `observe-only`; unset `PRECEPTOR_ENABLED` |
+#       | What is being recorded? | `preceptor status`                               |
+#       | Show my records         | `preceptor observations --mine`                  |
+#       | Delete records          | `preceptor forget --since <date>`                |
+#
+#   DOSING (cue injection) -- context/cue-awareness.md
+#       | Turn dosing off | `preceptor off`                     |
+#       | What is dosed?  | `preceptor cues`                    |
+#       | Why?            | `preceptor why <session_id>`        |
+#       | Keep/stop/restore | `preceptor pin|mute|restore <id>` |
+#
+# A probe whose `expect` accepts a control from the OTHER subsystem scores a
+# wrong answer as right. For stop-recording that is a false PASS on a privacy
+# gate: the user follows it, believes recording stopped, and it did not. The
+# audit below runs over every probe so a future edit cannot reintroduce it in
+# any of them, not just the one where it was found.
+# ---------------------------------------------------------------------------
+
+RECORDING_CONTROLS = [
+    "compose `observe-only`",
+    "unset PRECEPTOR_ENABLED",
+    "preceptor status",
+    "preceptor observations --mine",
+    "preceptor forget --since 2026-01-01",
+]
+DOSING_CONTROLS = [
+    "preceptor off",
+    "preceptor cues",
+    "preceptor why abc123",
+    "preceptor pin cue-017",
+    "preceptor mute cue-017",
+]
+
+# Which subsystem each probe's QUESTION is about. None = not a control
+# question (it asks for a claim or a judgment, and `expect` matches no
+# command), so there is no wrong subsystem for it to accept.
+PROBE_DOMAIN = {
+    "stop-recording": "recording",
+    "what-recorded": "recording",
+    "see-records": "recording",
+    "delete-records": "recording",
+    "removal-burden": None,
+    "cue-conflict": None,
+}
+
+
+def test_every_probe_has_a_declared_domain() -> None:
+    """A new probe must be classified here, or the audit below silently skips
+    it and the conflation check stops covering the whole file."""
+    assert {p["id"] for p in PROBES} == set(PROBE_DOMAIN)
+
+
+@pytest.mark.parametrize(
+    "probe_id", [i for i, d in PROBE_DOMAIN.items() if d is not None]
+)
+def test_probe_expect_rejects_wrong_subsystem_controls(probe_id: str) -> None:
+    """No probe may accept a control from the subsystem it is not asking about.
+
+    This is the generalized form of the round-3 defect: `stop-recording`
+    accepted `preceptor off`, which turns DOSING off and leaves the observer
+    recording.
+    """
+    probe = _probe(probe_id)
+    wrong = (
+        DOSING_CONTROLS if PROBE_DOMAIN[probe_id] == "recording" else RECORDING_CONTROLS
+    )
+    for control in wrong:
+        assert not re.search(probe["expect"], f"Run {control}."), (
+            f"{probe_id} accepts wrong-subsystem control {control!r}"
+        )
+
+
+def test_stop_recording_still_accepts_its_own_subsystem() -> None:
+    """The mirror of the above: narrowing `expect` must not have thrown out
+    the controls that genuinely do stop recording."""
+    probe = _probe("stop-recording")
+    for control in ("compose `observe-only`", "unset PRECEPTOR_ENABLED"):
+        assert re.search(probe["expect"], f"Run {control}."), control
 
 
 def test_matrix_cases_are_unique() -> None:

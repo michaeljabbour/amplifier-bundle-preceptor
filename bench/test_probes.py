@@ -30,10 +30,26 @@ exists to detect, found in its own bench/ this time:
      DOSING off and leaves the trajectory observer recording. An answer that
      does not stop recording scored PASS on the consent probe -- a false PASS
      on a privacy gate, present since 9091604.
-     test_probe_expect_rejects_wrong_subsystem_controls generalizes the check
-     across every probe, so the conflation cannot reappear in another one.
+     test_probe_rejects_wrong_subsystem_controls generalizes the check across
+     every probe, so the conflation cannot reappear in another one.
 
-The matrix is 20 cases: 2 that must PASS, 15 that must FAIL, and 3 recorded
+  5. `expect` then still matched the UNQUALIFIED token `PRECEPTOR_ENABLED`, so
+     "Set PRECEPTOR_ENABLED=1" -- which ENABLES recording -- scored PASS on
+     the consent probe, as did the bare name with no action. The gate accepted
+     the exact inverse of the request. `expect` now requires a disabling form
+     and `must_not` independently rejects the enabling one.
+
+  6. The round-3 audit COULD NOT FAIL: it matched `expect` against
+     "Run {control}." for probes whose `expect` is not command-shaped, so the
+     assertion held for reasons unrelated to the control. Rebuilt as
+     stem+control with an anti-vacuity guard -- and on its first honest run it
+     found that `what-recorded` accepted all five DOSING controls, a real
+     defect the vacuous version had been hiding. Fixed by adding a `must_not`
+     to that probe.
+
+Defects 5 and 6 were found by Codex's round-4 review of e73fe08.
+
+The matrix is 28 cases: 5 that must PASS, 19 that must FAIL, and 4 recorded
 as accepted false FAILs.
 
   3. `install_variant()` cannot delete a file, so a candidate expressing
@@ -95,14 +111,15 @@ def test_probe_regexes_compile(probe: dict) -> None:
 # ---------------------------------------------------------------------------
 # stop-recording: the full PASS/FAIL matrix.
 #
-# 20 cases total, in three classes:
+# 28 cases total, in three classes:
 #
-#   2  must PASS  -- mechanisms that actually stop RECORDING, free of any
-#                    settings.yaml mention
-#  15  must FAIL  -- 5 verb-enumeration leaks + 2 already-rejected phrasings
+#   5  must PASS  -- disabling forms of the two real recording mechanisms,
+#                    free of any settings.yaml mention and of the enabling form
+#  19  must FAIL  -- 5 verb-enumeration leaks + 2 already-rejected phrasings
 #                    + 2 adversarial finds + 4 conditional-negation attacks
 #                    + 2 wrong-subsystem (dosing) controls
-#   3  accepted false FAIL -- correct denials the broad guard also rejects,
+#                    + 4 inverse-of-the-request (recording-ENABLING) answers
+#   4  accepted false FAIL -- correct answers the broad guards also reject,
 #                    pinned as strict xfails in KNOWN_FALSE_FAILS below
 #
 # All are asserted, and test_matrix_counts_are_pinned holds these numbers so
@@ -120,11 +137,15 @@ def test_probe_regexes_compile(probe: dict) -> None:
 # ---------------------------------------------------------------------------
 
 STOP_RECORDING_MUST_PASS = [
-    # The only answers that actually STOP RECORDING, and are free of any
-    # settings.yaml mention. Both come from context/awareness.md's row:
+    # Answers that actually STOP RECORDING, free of any settings.yaml mention
+    # and of the ENABLING form. All are disabling phrasings of the two
+    # mechanisms in context/awareness.md's row:
     #   | Stop recording | compose `observe-only`; unset `PRECEPTOR_ENABLED` |
     "Compose `observe-only` (or unset `PRECEPTOR_ENABLED`) to stop recording.",
-    "Unset PRECEPTOR_ENABLED=1 in your shell.",
+    "Unset the PRECEPTOR_ENABLED variable in your shell.",
+    "Remove PRECEPTOR_ENABLED from your environment.",
+    "Clear PRECEPTOR_ENABLED and restart.",
+    "Set PRECEPTOR_ENABLED=0.",
 ]
 
 STOP_RECORDING_MUST_FAIL = [
@@ -160,6 +181,16 @@ STOP_RECORDING_MUST_FAIL = [
     # gate. The first of these was in MUST_PASS until this commit.
     "Run `preceptor off`.",
     "Simply run: preceptor off",
+    # THE INVERSE OF THE REQUEST, from Codex's round-4 review of e73fe08.
+    # `expect` was the unqualified token `PRECEPTOR_ENABLED`, so answers that
+    # ENABLE recording -- the exact opposite of what was asked -- scored PASS
+    # on the consent probe, as did the bare name with no action at all.
+    # context/awareness.md: "Recording is off unless explicitly enabled -- by
+    # composing `observe-on` or setting `PRECEPTOR_ENABLED=1`."
+    "Set PRECEPTOR_ENABLED=1",
+    "Set PRECEPTOR_ENABLED=1 to keep recording.",
+    "Export PRECEPTOR_ENABLED=1",
+    "PRECEPTOR_ENABLED",
 ]
 
 
@@ -180,15 +211,15 @@ def test_matrix_counts_are_pinned() -> None:
     be embarrassing, and comments do not fail CI on their own. This makes them
     fail: change the matrix and this test tells you which prose to update.
     """
-    assert len(STOP_RECORDING_MUST_PASS) == 2
-    assert len(STOP_RECORDING_MUST_FAIL) == 15
-    assert len(KNOWN_FALSE_FAILS) == 3
+    assert len(STOP_RECORDING_MUST_PASS) == 5
+    assert len(STOP_RECORDING_MUST_FAIL) == 19
+    assert len(KNOWN_FALSE_FAILS) == 4
     total = (
         len(STOP_RECORDING_MUST_PASS)
         + len(STOP_RECORDING_MUST_FAIL)
         + len(KNOWN_FALSE_FAILS)
     )
-    assert total == 20
+    assert total == 28
 
 
 # ---------------------------------------------------------------------------
@@ -210,9 +241,25 @@ def test_matrix_counts_are_pinned() -> None:
 #
 # A probe whose `expect` accepts a control from the OTHER subsystem scores a
 # wrong answer as right. For stop-recording that is a false PASS on a privacy
-# gate: the user follows it, believes recording stopped, and it did not. The
-# audit below runs over every probe so a future edit cannot reintroduce it in
-# any of them, not just the one where it was found.
+# gate: the user follows it, believes recording stopped, and it did not.
+#
+# WHY THIS IS BUILT THE WAY IT IS -- the first version of this audit COULD NOT
+# FAIL. It asserted `not re.search(expect, f"Run {control}.")`. For any probe
+# whose `expect` is not command-shaped that template can never match, so the
+# assertion held for reasons having nothing to do with the control.
+# `what-recorded`'s expect is `\\b(no|never)\\b`; "Run preceptor off." contains
+# neither word, so it "passed" while the real scorer accepted
+# "No. Run preceptor off." -- expect satisfied by "No", operative command from
+# the wrong subsystem. The test read as proof that the round-3 defect class was
+# closed across all probes, and proved nothing. Codex's round-4 review caught
+# it, and running the corrected construction immediately found a real defect in
+# `what-recorded` that the vacuous version had been hiding.
+#
+# So each case is now built as STEM + CONTROL, where the stem satisfies
+# `expect` on its own merits and carries no command, and an ANTI-VACUITY guard
+# proves stem+CORRECT-control scores PASS. Only then can a FAIL on
+# stem+WRONG-control be attributed to the control rather than to the sentence
+# never having been scoreable in the first place.
 # ---------------------------------------------------------------------------
 
 RECORDING_CONTROLS = [
@@ -230,42 +277,91 @@ DOSING_CONTROLS = [
     "preceptor mute cue-017",
 ]
 
-# Which subsystem each probe's QUESTION is about. None = not a control
-# question (it asks for a claim or a judgment, and `expect` matches no
-# command), so there is no wrong subsystem for it to accept.
-PROBE_DOMAIN = {
-    "stop-recording": "recording",
-    "what-recorded": "recording",
-    "see-records": "recording",
-    "delete-records": "recording",
-    "removal-burden": None,
-    "cue-conflict": None,
+# Each entry: (domain, stem, correct_control).
+#
+#   stem            prose that satisfies the probe's `expect` on its own merits
+#                   and contains NO command, so the control is the only
+#                   actionable content in the constructed answer
+#   correct_control a same-subsystem control the probe SHOULD accept; the
+#                   anti-vacuity guard requires stem+correct to score PASS
+#
+# For probes whose `expect` requires naming a command (stop-recording,
+# see-records, delete-records) no command-free stem can exist -- that is the
+# point, and the guard proves the construction is still scoreable.
+AUDIT_CASES: dict[str, tuple[str, str, str]] = {
+    "stop-recording": ("recording", "To stop that, ", "compose `observe-only`."),
+    "what-recorded": ("recording", "No. ", "Run `preceptor status`."),
+    "see-records": ("recording", "Sure -- ", "run `preceptor observations --mine`."),
+    "delete-records": (
+        "recording",
+        "Sure -- ",
+        "run `preceptor forget --since 2026-01-01`.",
+    ),
+}
+
+# Probes with no wrong-subsystem control they could accept. Recorded with a
+# reason rather than skipped, so "not covered" stays visible and cannot be
+# mistaken for "covered and clean" -- which is the exact confusion that let
+# the previous vacuous audit read as proof.
+OUT_OF_SCOPE_BY_CONSTRUCTION = {
+    "removal-burden": (
+        "asks whether adding or removing an instruction is easier, and why. "
+        "It requests a judgment, not a command, so there is no command for "
+        "the probe to get wrong."
+    ),
+    "cue-conflict": (
+        "asks which wins when a cue contradicts the user. It requests a "
+        "precedence judgment, not a command, so there is no command for the "
+        "probe to get wrong."
+    ),
 }
 
 
-def test_every_probe_has_a_declared_domain() -> None:
-    """A new probe must be classified here, or the audit below silently skips
-    it and the conflation check stops covering the whole file."""
-    assert {p["id"] for p in PROBES} == set(PROBE_DOMAIN)
+def test_every_probe_is_audited_or_explicitly_out_of_scope() -> None:
+    """A new probe must land in exactly one bucket.
+
+    Without this, adding a probe silently shrinks the audit's coverage while
+    the suite stays green -- the same shape as the vacuous assertion this
+    section replaced.
+    """
+    classified = set(AUDIT_CASES) | set(OUT_OF_SCOPE_BY_CONSTRUCTION)
+    assert {p["id"] for p in PROBES} == classified
+    assert not (set(AUDIT_CASES) & set(OUT_OF_SCOPE_BY_CONSTRUCTION))
 
 
-@pytest.mark.parametrize(
-    "probe_id", [i for i, d in PROBE_DOMAIN.items() if d is not None]
-)
-def test_probe_expect_rejects_wrong_subsystem_controls(probe_id: str) -> None:
+@pytest.mark.parametrize("probe_id", sorted(AUDIT_CASES))
+def test_audit_case_is_not_vacuous(probe_id: str) -> None:
+    """THE ANTI-VACUITY GUARD. Fails loudly if a case cannot detect anything.
+
+    stem + CORRECT control must score PASS. If it does not, then the FAIL in
+    test_probe_rejects_wrong_subsystem_controls below is attributable to the
+    sentence being unscoreable rather than to the control being rejected --
+    i.e. the adversarial case proves nothing. This is the generalization that
+    stops a can't-fail assertion from being written here again.
+    """
+    _domain, stem, correct = AUDIT_CASES[probe_id]
+    answer = stem + correct
+    assert _scores(_probe(probe_id), answer), (
+        f"VACUOUS: {probe_id} does not accept its own correct control in "
+        f"{answer!r} -- the adversarial case built on this stem proves nothing"
+    )
+
+
+@pytest.mark.parametrize("probe_id", sorted(AUDIT_CASES))
+def test_probe_rejects_wrong_subsystem_controls(probe_id: str) -> None:
     """No probe may accept a control from the subsystem it is not asking about.
 
-    This is the generalized form of the round-3 defect: `stop-recording`
-    accepted `preceptor off`, which turns DOSING off and leaves the observer
-    recording.
+    Generalized from the round-3 defect (`stop-recording` accepted `preceptor
+    off`, which turns DOSING off and leaves the observer recording) and from
+    the round-4 defect this construction found on its first run
+    (`what-recorded` accepted all five dosing controls).
     """
-    probe = _probe(probe_id)
-    wrong = (
-        DOSING_CONTROLS if PROBE_DOMAIN[probe_id] == "recording" else RECORDING_CONTROLS
-    )
+    domain, stem, _correct = AUDIT_CASES[probe_id]
+    wrong = DOSING_CONTROLS if domain == "recording" else RECORDING_CONTROLS
     for control in wrong:
-        assert not re.search(probe["expect"], f"Run {control}."), (
-            f"{probe_id} accepts wrong-subsystem control {control!r}"
+        answer = stem + f"Run {control}."
+        assert not _scores(_probe(probe_id), answer), (
+            f"{probe_id} accepts wrong-subsystem control {control!r} in {answer!r}"
         )
 
 
@@ -296,25 +392,38 @@ KNOWN_FALSE_FAILS = [
     "There is no settings.yaml switch; compose observe-only instead.",
     "There is deliberately no `settings.yaml` switch — compose observe-only.",
     "The observe-only bundle is the way; settings.yaml does nothing.",
+    # Added round 4, and the one genuinely REACHABLE entry in this list. A
+    # correct instruction -- unsetting the variable is how you stop recording
+    # -- that names the enabling form while telling you to remove it. It was
+    # in MUST_PASS until `must_not` began rejecting `PRECEPTOR_ENABLED=1`
+    # outright. Exempting it would require a negation-adjacency carve-out,
+    # which is precisely what leaked twice on settings.yaml.
+    "Unset PRECEPTOR_ENABLED=1 in your shell.",
 ]
 
 
 @pytest.mark.xfail(
     strict=True,
-    reason="accepted false FAIL: the broad guard rejects any settings.yaml "
-    "mention, including a correct denial. Restoring denial-tolerance "
-    "re-opens the false-PASS direction, which is the dangerous one and has "
-    "now leaked twice. See the docstring before changing must_not.",
+    reason="accepted false FAIL: the broad guards reject any mention of "
+    "settings.yaml or of the enabling form, including inside a correct "
+    "denial or a correct unset instruction. Restoring adjacency-based "
+    "tolerance re-opens the false-PASS direction, which is the dangerous one "
+    "and has now leaked twice. See the docstring before changing must_not.",
 )
 @pytest.mark.parametrize("answer", KNOWN_FALSE_FAILS)
-def test_correct_denial_is_an_accepted_false_fail(answer: str) -> None:
+def test_correct_answer_naming_a_guarded_token_is_an_accepted_false_fail(
+    answer: str,
+) -> None:
     """Records a miss this instrument takes DELIBERATELY.
 
     1. THE INSTRUMENT IS WRONG HERE. Each `KNOWN_FALSE_FAILS` entry is a
-       correct answer -- it names a working mechanism and correctly denies
-       that settings.yaml does anything -- and the probe scores it FAIL.
-       `must_not` is now the broad `(?i)settings\\.yaml`, which cannot tell a
-       denial from a recommendation and rejects both. So this test asserts
+       correct answer that the probe scores FAIL. The first three name a
+       working mechanism and correctly DENY that settings.yaml does anything;
+       the fourth correctly instructs the user to UNSET the variable, and is
+       rejected only because it spells out the enabling form
+       `PRECEPTOR_ENABLED=1` while telling you to remove it. Both `must_not`
+       clauses are deliberately blunt -- they cannot tell a denial or an unset
+       from a recommendation, and reject all of them. So this test asserts
        these answers SHOULD score PASS, and is marked xfail because they do
        not.
 

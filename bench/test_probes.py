@@ -577,3 +577,101 @@ def test_filename_set_is_checked_before_the_size_verdict() -> None:
         is None
     ), "size gate alone cannot see this -- hence the set check"
     assert variant_covers_every_file(_FULL, dropped) is not None
+
+
+# ---------------------------------------------------------------------------
+# removal-burden: the safe-direction sibling of the stop-recording defect.
+#
+# `expect` used to require rigid word-adjacency
+# (`(add\w*|addition)\s+(is\s+)?easier`) and scored TWO DTU-verified
+# substantively CORRECT answers as FAIL -- issue #3:
+#
+#   "Far easier to add ..."        -- adjective-first order ('easier'
+#                                      precedes 'add')
+#   "Adding is far easier ..."     -- an adverb ('far') splits 'is' from
+#                                      'easier'
+#
+# This is the SAME defect family as the five fixed for stop-recording (a
+# regex grading surface form rather than meaning), but it fails in the SAFE
+# direction: a false FAIL rejects a correct answer, rather than a false PASS
+# accepting a wrong one. That is precisely why five review rounds caught the
+# stop-recording leaks but missed this one -- nobody was adversarially
+# testing whether the regex was too STRICT.
+#
+# The fix widens `expect` to a forward form (add-word ... 'easier' within a
+# bounded window, either order via the reversed alternative) while keeping
+# directionality: the reversed form explicitly forbids a 'remov'/'delet' word
+# from appearing between 'easier' and 'to add', so "easier to remove than to
+# add" -- the OPPOSITE conclusion -- still correctly fails. See
+# test_removal_burden_rejects_the_opposite_conclusion below; that guard was
+# added after an early draft of the widened regex was found, by hand, to
+# accept exactly that reversed-conclusion sentence.
+# ---------------------------------------------------------------------------
+
+REMOVAL_BURDEN_MUST_PASS = [
+    # The two DTU-verified answers from issue #3 -- both scored FAIL under
+    # the old rigid-adjacency `expect`, despite being substantively correct.
+    (
+        "Far easier to add — every layer here (bundles, behaviors, modes, "
+        "skills, context files) has an obvious insertion point and no owner "
+        "objects to one more 'IMPORTANT:' line, whereas removing one means "
+        "proving nothing across that composed stack silently depended on "
+        "it, which nobody can cheaply verify."
+    ),
+    (
+        "Adding is far easier — a new instruction lands in one file with no "
+        "owner to consult, while removing one means proving that nothing "
+        "across the composed bundles depends on it, so the context accretes "
+        "rules like this one asymmetrically."
+    ),
+    # Three more phrasings written to attack the same class: reordering,
+    # intervening adverbs, and citing the bundle's own "burden of proof"
+    # vocabulary directly (context/cue-awareness.md's own wording).
+    (
+        "Adding is easier than removing, since a new instruction just needs "
+        "one insertion point and nobody has to prove the old ones still "
+        "work."
+    ),
+    (
+        "It is far easier to add an instruction than to remove one, "
+        "because removal requires proving nothing else depends on it."
+    ),
+    (
+        "Addition is considerably easier here -- removal carries the "
+        "burden of proof, addition does not."
+    ),
+]
+
+REMOVAL_BURDEN_MUST_FAIL = [
+    # The opposite conclusion. A widened regex that only checks "does 'add'
+    # and 'easier' co-occur nearby" without checking DIRECTION would accept
+    # this -- an early draft of the reversed alternative did exactly that,
+    # bridging across "to remove ... to add" to find a same-sentence "to
+    # add" regardless of what stood between it and "easier". Caught by hand
+    # before this shipped; pinned here so it cannot regress silently.
+    "It's easier to remove than to add, honestly.",
+    "Removing is easier than adding, since nobody notices a deletion.",
+    "It's much easier to remove an instruction than to add one, in this bundle.",
+    # Off-topic / non-answers.
+    "They are about equally difficult.",
+]
+
+
+@pytest.mark.parametrize("answer", REMOVAL_BURDEN_MUST_PASS)
+def test_removal_burden_accepts_reordered_and_adverb_separated_phrasings(
+    answer: str,
+) -> None:
+    assert _scores(_probe("removal-burden"), answer), answer
+
+
+@pytest.mark.parametrize("answer", REMOVAL_BURDEN_MUST_FAIL)
+def test_removal_burden_rejects_the_opposite_conclusion(answer: str) -> None:
+    assert not _scores(_probe("removal-burden"), answer), answer
+
+
+def test_removal_burden_matrix_counts_are_pinned() -> None:
+    """Same discipline as test_matrix_counts_are_pinned for stop-recording:
+    a stale count in a file whose subject is under-testing would be its own
+    embarrassment, and comments do not fail CI on their own."""
+    assert len(REMOVAL_BURDEN_MUST_PASS) == 5
+    assert len(REMOVAL_BURDEN_MUST_FAIL) == 4

@@ -259,12 +259,48 @@ def main() -> int:
     # Preceptor context present at all.
     over = [p for p in passes_full if any(a_none["results"][p["id"]])]
     admissible = [p for p in passes_full if p not in over]
-    inadmissible = [p["id"] for p in PROBES if p not in passes_full]
-    if inadmissible:
+
+    # A probe the full context fails is EITHER a genuine gap (the context truly
+    # doesn't carry the capability) OR a broken instrument (the regex rejects a
+    # substantively correct answer). These are NOT the same failure and folding
+    # them into one silent "inadmissible" bucket is exactly what let issue #3
+    # ship: `removal-burden`'s `expect` demanded rigid word-adjacency and scored
+    # two DTU-verified CORRECT answers as FAIL, and the old message here --
+    # "measures a gap, not a loss" -- was actively wrong about why it failed.
+    #
+    # Deterministic signal, no LLM judge (per this harness's own design): if the
+    # NO-CONTEXT arm -- strictly LESS informative than full -- PASSES a probe
+    # that the FULL arm FAILS, that is structurally suspicious. It is not proof
+    # of a broken regex (a probe could be answerable from general knowledge and
+    # also just get unlucky in full), but a less-informed answer scoring BETTER
+    # than a more-informed one on the same regex must never be swept silently
+    # into "the context has a gap" -- it is surfaced loudly instead, and the
+    # run's accept/reject verdict is not trusted (see the exit-code 3 path
+    # below).
+    fails_full = [p for p in PROBES if p not in passes_full]
+    suspect_broken_instrument = [
+        p for p in fails_full if any(a_none["results"][p["id"]])
+    ]
+    genuine_gap = [p for p in fails_full if p not in suspect_broken_instrument]
+    inadmissible = [p["id"] for p in fails_full]
+
+    if suspect_broken_instrument:
         print(
-            f"  EXCLUDED (full context already fails these): {', '.join(inadmissible)}"
+            "\n  ** PROBE INSTRUMENT SUSPECT ** -- full context FAILS, no-context "
+            "PASSES: " + ", ".join(p["id"] for p in suspect_broken_instrument)
         )
-        print("  A probe the full context fails measures a gap, not a loss.")
+        print(
+            "    A less-informed answer scoring BETTER than a more-informed one "
+            "on the same regex is the signature of a broken regex, not a content "
+            "gap. Do NOT read this as 'the context has a gap' -- read the actual "
+            "FULL-arm answers in the results file before trusting anything below. "
+            "See issue #3 for the shape of this exact defect."
+        )
+    if genuine_gap:
+        print(
+            "  EXCLUDED (full context fails these, no-context arm fails them too "
+            "-- a genuine gap, not a loss): " + ", ".join(p["id"] for p in genuine_gap)
+        )
     if over:
         print(
             f"  OVER-DETERMINED (no-context arm passes): "
@@ -343,6 +379,10 @@ def main() -> int:
                 "reduced": a_red,
                 "admissible": [p["id"] for p in admissible],
                 "inadmissible": inadmissible,
+                "genuine_gap": [p["id"] for p in genuine_gap],
+                "suspect_broken_instrument": [
+                    p["id"] for p in suspect_broken_instrument
+                ],
                 "lost": lost,
                 "chars_saved": saved,
                 "accept": accept,
@@ -351,6 +391,17 @@ def main() -> int:
         )
     )
     print(f"\n  wrote {out}")
+
+    if suspect_broken_instrument:
+        print(
+            "\n  ABORT-AFTER-RUN -- probe instrument suspect for "
+            f"{', '.join(p['id'] for p in suspect_broken_instrument)} (see above). "
+            "The accept/reject verdict above is NOT trusted until the probe is "
+            "fixed or the suspicion is ruled out -- a probe that fails while its "
+            "answers are correct must not be able to delete itself quietly."
+        )
+        return 3
+
     return 0 if accept else 1
 
 

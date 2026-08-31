@@ -79,6 +79,25 @@ Learned the hard way; do not re-derive them.
 - Event payload keys are untyped dict literals with no schema and no tests behind them. Use
   `.get()`. Never index.
 
+## Known install blocker: cryptography on aarch64
+
+`cryptography==50.0.1`'s wheel SIGILLs (exit 132, empty stderr) on Apple Silicon during
+`tool-mcp` import at session init -- a transitive dependency of the `amplifier` CLI itself,
+nothing this repo declares or can pin in a module's own `pyproject.toml`. None of our three
+modules import `cryptography` or `mcp` at all; inventing a fake dependency edge to hang a pin
+on would be dishonest metadata, the same reason `amplifier-core` stays a peer dependency
+rather than a real one. Setting `PYTHONFAULTHANDLER=1` before reproducing surfaces a
+traceback rooted in `cryptography/exceptions.py`, confirming the crash is the C extension,
+not this bundle.
+
+**Workaround, everywhere this repo provisions an environment:**
+`uv tool install -vv git+https://github.com/microsoft/amplifier --with "cryptography==45.0.7"`
+
+This was fixed once already for `bench/dtu_run.py`'s own trial containers (commit 5104c9d)
+and did not propagate to `bench/arms/*/install.yaml`, which provision the calibration-loop
+arms the same way -- both are now pinned. If you add a new install script that runs
+`uv tool install ... amplifier` on aarch64, carry the pin forward.
+
 ## Before you commit
 
 ```bash

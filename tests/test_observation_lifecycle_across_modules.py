@@ -108,15 +108,32 @@ def test_the_injector_stamps_manifests_with_an_aware_timestamp() -> None:
     something ever does compare them, the third module should already be
     known to agree instead of becoming the next seam defect.
 
-    This is a SOURCE-LEVEL assertion and weaker than the behavioural ones
-    above, which is why it says so. The injector builds that timestamp
-    inline while writing a manifest rather than in a callable helper, so
-    exercising it behaviourally would mean standing up a full dosing path
-    for a property nothing currently reads. An honest weaker test, labelled,
-    beats a strong-looking one that cannot fail -- the first draft of this
-    test asserted `"timezone" in injector.__dict__ or True`, which is
-    vacuous, and vacuous assertions are the exact defect class this branch
-    spent a round removing from bench/test_probes.py.
+    KNOWN WEAKNESS, STATED RATHER THAN IMPLIED. This is a SOURCE-LEVEL
+    assertion -- it greps the injector's own file for the construction --
+    and it is strictly weaker than the behavioural tests around it. It would
+    not catch a change that kept the literal text while altering what
+    actually gets written. The injector builds that timestamp inline while
+    writing a manifest rather than in a callable helper, so exercising it
+    behaviourally would mean standing up a full dosing path for a property
+    nothing currently reads. That trade is the reason for the weaker form;
+    it is not an oversight.
+
+    THIS DOCSTRING IS ALSO THE RECORD OF A DEFECT IN THIS TEST. Its first
+    draft asserted:
+
+        assert "timezone" in injector.__dict__ or True
+
+    which is a tautology -- the `or True` makes it unfailable, so it would
+    have reported success forever regardless of what the injector did. That
+    is the same vacuous-assertion class this branch had just spent a round
+    removing from `bench/test_probes.py`'s subsystem audit, reintroduced by
+    the same author in a brand-new file one commit later. It was caught by a
+    linter, not by review.
+
+    The lesson worth keeping: an honest weaker test, labelled as weak, beats
+    a strong-looking one that cannot fail. If you replace this with
+    something stronger, good -- but do not replace it with something that
+    merely looks stronger.
     """
     injector_file = injector.__file__
     assert injector_file is not None, "injector module has no __file__"

@@ -78,6 +78,7 @@ PROBES = json.loads((HERE / "probes" / "context-probes.json").read_text())["prob
 
 sys.path.insert(0, str(HERE))
 from probe_context import (
+    annotate_verdict,
     classify_full_arm_failures,
     reduction_is_live,
     variant_covers_every_file,
@@ -700,6 +701,60 @@ def test_classify_full_arm_failures_ignores_probes_that_pass_full() -> None:
     assert result.suspect_broken_instrument == []
 
 
+# ---------------------------------------------------------------------------
+# The verdict annotation. `accept` and `trust` are computed independently and
+# stay that way -- but the human-facing line must not read as actionable when
+# the run is not trustworthy.
+#
+# BOTH DIRECTIONS ARE TESTED ON PURPOSE. An annotation that appears on every
+# run is decoration: it stops being read, and then it stops working, which
+# would reproduce the original defect wearing a warning label. The negative
+# cases below are what catch a future change that annotates unconditionally.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("verdict", ["ACCEPTED", "REJECTED", "REJECT", "INCONCLUSIVE"])
+def test_verdict_is_annotated_when_untrustworthy(verdict: str) -> None:
+    annotated = annotate_verdict(verdict, ["removal-burden"])
+    assert annotated == f"{verdict} (NOT TRUSTED — see below)"
+    # The original verdict must survive intact -- the annotation adds, it
+    # never replaces. A reader still needs to know WHICH verdict is suspect.
+    assert annotated.startswith(verdict)
+
+
+@pytest.mark.parametrize("verdict", ["ACCEPTED", "REJECTED", "REJECT", "INCONCLUSIVE"])
+def test_verdict_is_untouched_when_trustworthy(verdict: str) -> None:
+    """THE NEGATIVE CASE. If this ever fails, someone made the annotation
+    unconditional and it has become noise."""
+    assert annotate_verdict(verdict, []) == verdict
+    assert "NOT TRUSTED" not in annotate_verdict(verdict, [])
+
+
+def test_annotation_tracks_untrustworthy_exactly() -> None:
+    """One assertion covering the iff, so the relationship is stated in one
+    place rather than inferred from two parametrized suites."""
+    for untrustworthy in ([], ["a"], ["a", "b"]):
+        annotated = annotate_verdict("ACCEPTED", untrustworthy)
+        assert ("NOT TRUSTED" in annotated) is bool(untrustworthy), untrustworthy
+
+
+def test_annotation_and_exit_code_and_json_agree() -> None:
+    """The three signals must not drift apart.
+
+    `verdict_trustworthy` in the results JSON is `not untrustworthy`, the
+    exit code is 3 when `untrustworthy` is non-empty, and the annotation
+    appears on the same condition. All three are derived from the same list
+    in main(); this pins that they stay in agreement, since a reader who
+    trusts one and not the others is exactly the failure being fixed.
+    """
+    for untrustworthy in ([], ["removal-burden"]):
+        annotated = "NOT TRUSTED" in annotate_verdict("ACCEPTED", untrustworthy)
+        json_flag_trustworthy = not untrustworthy
+        exits_three = bool(untrustworthy)
+        assert annotated == exits_three
+        assert annotated != json_flag_trustworthy
+
+
 def test_filename_set_is_checked_before_the_size_verdict() -> None:
     """Ordering matters: a missing file makes the aggregate look SMALLER, so
     reduction_is_live() would happily pass it. The set check must speak first
@@ -748,6 +803,17 @@ def test_filename_set_is_checked_before_the_size_verdict() -> None:
 # proves nothing about the artifact being graded. If you do not have the
 # transcript, get it, or mark the fixture honestly as reconstructed and say
 # which measured properties it reproduces.
+#
+# AND THE SAME RULE APPLIES TO THE GUARDS, WHICH IS A SEPARATE MISTAKE. The
+# fixture-shape guard below was itself calibrated against the reconstructed
+# fixtures it was written beside: it asserted a >150-character gap between
+# the LAST claim token and the command, which held for those, and FAILED the
+# moment real transcripts replaced them -- live answers scatter "no" on both
+# sides of the code fence, so in one of them the last claim sits 418
+# characters AFTER the command and the span is negative. The guard measured a
+# property of the artifact its author had built, not of the artifact it was
+# modelling. "Verify against real transcripts" and "verify your GUARD against
+# real transcripts" are two different mistakes, and this branch made both.
 # ===========================================================================
 
 

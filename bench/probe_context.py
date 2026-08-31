@@ -201,6 +201,33 @@ class FailureClassification(NamedTuple):
     suspect_broken_instrument: list[str]
 
 
+def annotate_verdict(verdict: str, untrustworthy: list[str]) -> str:
+    """Mark a verdict line as untrustworthy, in place, when it is.
+
+    THE PROBLEM THIS SOLVES. `accept` and `trust` are computed
+    INDEPENDENTLY, and deliberately stay that way -- collapsing them would
+    lose the ability to say "the statistics said accept, and you should not
+    believe them", which is more useful than a merged verdict. But that
+    independence meant the loudest line in the output was the one that
+    should not be acted on: a bare `ACCEPTED` printed above a `VERDICT NOT
+    TRUSTED` banner, so a skimmer -- or anything tailing the output -- saw
+    `ACCEPTED` first and stopped. Exit code 3 and `verdict_trustworthy:
+    false` in the results JSON were already correct; the human-facing line
+    was not.
+
+    That is this harness's own subject matter turned on itself: an
+    instrument reading as fine while being wrong. So the annotation goes on
+    the verdict line itself rather than reordering the output.
+
+    Returns the verdict unchanged when nothing is untrustworthy -- the
+    annotation must be a real signal, not decoration that appears on every
+    run and stops being read.
+    """
+    if not untrustworthy:
+        return verdict
+    return f"{verdict} (NOT TRUSTED — see below)"
+
+
 def classify_full_arm_failures(
     probes: list[dict],
     full_results: dict[str, list[bool]],
@@ -432,7 +459,11 @@ def main() -> int:
 
     if not admissible:
         accept = False
-        print("\n  REJECT -- no admissible probes; the ablation proves nothing.")
+        print(
+            "\n  "
+            + annotate_verdict("REJECT", untrustworthy)
+            + " -- no admissible probes; the ablation proves nothing."
+        )
     else:
         d = decide(
             Mutation(
@@ -445,7 +476,7 @@ def main() -> int:
             ni_margin=0.10,
         )
         accept = d.outcome == "accepted"
-        print(f"\n  {d.outcome.upper()} -- {d.reason}")
+        print(f"\n  {annotate_verdict(d.outcome.upper(), untrustworthy)} -- {d.reason}")
         if lost:
             print(f"  (scored lower, not necessarily significantly: {', '.join(lost)})")
 

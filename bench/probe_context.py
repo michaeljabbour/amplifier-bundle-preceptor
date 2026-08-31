@@ -46,6 +46,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).parent))
 from climb import Measurement, Mutation, decide
@@ -189,36 +190,78 @@ def reduction_is_live(full_chars: int, reduced_chars: int) -> str | None:
     return None
 
 
+class FailureClassification(NamedTuple):
+    """How each full-arm failure was accounted for.
+
+    `declared_gap` is the only bucket that may be excluded silently.
+    """
+
+    declared_gap: list[str]
+    unresolved: list[str]
+    suspect_broken_instrument: list[str]
+
+
 def classify_full_arm_failures(
     probes: list[dict],
     full_results: dict[str, list[bool]],
     none_results: dict[str, list[bool]],
-) -> tuple[list[str], list[str]]:
-    """Split the probes the FULL arm fails into (genuine_gap, suspect_broken).
+) -> FailureClassification:
+    """Account for every probe the FULL arm fails. Nothing is excluded silently.
 
     A probe the full-context arm fails is EITHER a genuine content gap (the
-    context truly doesn't carry this capability) OR a broken instrument (the
-    regex rejects a substantively correct answer) -- see issue #3:
-    `removal-burden`'s `expect` demanded rigid word-adjacency and scored two
-    DTU-verified CORRECT answers as FAIL, while the caller used to fold every
-    full-arm failure into one "inadmissible" bucket labeled "measures a gap,
-    not a loss" -- actively wrong about why THIS one failed.
+    context truly does not carry this capability) OR a broken instrument (the
+    regex rejects substantively correct answers). Those are not the same
+    finding, and the original code folded both into one silent
+    "inadmissible" bucket labelled "measures a gap, not a loss" -- which for
+    a broken probe is an actively false explanation.
 
-    Deterministic signal, no LLM judge (per this harness's own design): if
-    the NO-CONTEXT arm -- strictly LESS informative than full -- PASSES a
-    probe the FULL arm FAILS, that is structurally suspicious. It is not
-    proof of a broken regex (a probe could be answerable from general
-    knowledge and also just get unlucky in full), but a less-informed answer
-    scoring BETTER than a more-informed one on the same regex must never be
-    swept silently into "the context has a gap".
+    THE FIRST FIX FOR THAT WAS ALSO WRONG, AND ITS FAILURE IS WHY THIS IS
+    NOW THREE BUCKETS. It flagged a probe only when the NO-CONTEXT arm
+    PASSED one the full arm failed. That signal is real but its precondition
+    is narrow: it requires the probe to be answerable without the context at
+    all. `main`'s `removal-burden` regex was broken badly enough to reject
+    correct answers in BOTH arms, so the discriminator never engaged and the
+    broken instrument was still laundered into "a genuine gap" -- the real
+    harness printed exactly that and exited 0. The guard was unit-tested
+    against a synthetic probe whose no-context arm passed, which is the only
+    case it could detect.
 
-    Returns (genuine_gap_ids, suspect_broken_instrument_ids), both drawn from
-    `probes` in their original order.
+    So the buckets are now:
+
+      suspect_broken_instrument
+          The no-context arm PASSES a probe the full arm FAILS. A
+          less-informed answer scoring BETTER than a more-informed one on
+          the same regex is the strongest available signal of a broken
+          regex. Loud.
+
+      unresolved
+          BOTH arms fail and the probe is not declared. There is NO
+          deterministic signal that separates "genuine gap" from "broken
+          regex" here -- so the harness does not guess. It reports the
+          probe as unaccounted-for and refuses to treat the run's verdict
+          as trustworthy. This is the bucket `main`'s broken regex belongs
+          in, and the one that did not exist.
+
+      declared_gap
+          The probe carries `"known_gap": true` in
+          probes/context-probes.json. A human looked at the full arm's
+          actual answers and recorded that the context genuinely does not
+          carry this. Exclusion becomes a DECLARATION in a reviewable file
+          rather than an inference the harness makes on the run's behalf --
+          which is the only version of "exclude this probe" that cannot
+          hide a broken instrument.
+
+    No LLM judge anywhere, per this harness's own design.
     """
     fails_full = [p["id"] for p in probes if not all(full_results[p["id"]])]
+    declared = {p["id"] for p in probes if p.get("known_gap")}
+
     suspect = [pid for pid in fails_full if any(none_results[pid])]
-    genuine = [pid for pid in fails_full if pid not in suspect]
-    return genuine, suspect
+    declared_gap = [pid for pid in fails_full if pid in declared and pid not in suspect]
+    unresolved = [
+        pid for pid in fails_full if pid not in suspect and pid not in declared_gap
+    ]
+    return FailureClassification(declared_gap, unresolved, suspect)
 
 
 def run_arm(container: str, label: str, variant: dict[str, str], reps: int) -> dict:
@@ -292,37 +335,52 @@ def main() -> int:
     over = [p for p in passes_full if any(a_none["results"][p["id"]])]
     admissible = [p for p in passes_full if p not in over]
 
-    # A probe the full context fails is EITHER a genuine gap (the context truly
-    # doesn't carry the capability) OR a broken instrument (the regex rejects a
-    # substantively correct answer). These are NOT the same failure and folding
-    # them into one silent "inadmissible" bucket is exactly what let issue #3
-    # ship: `removal-burden`'s `expect` demanded rigid word-adjacency and scored
-    # two DTU-verified CORRECT answers as FAIL, and the old message here --
-    # "measures a gap, not a loss" -- was actively wrong about why it failed.
-    # See classify_full_arm_failures() for the deterministic signal used to
-    # split the two. The run's accept/reject verdict is not trusted when a
-    # suspect instrument fires (see the exit-code 3 path below).
-    genuine_gap, suspect_broken_instrument = classify_full_arm_failures(
+    # Every full-arm failure must be ACCOUNTED FOR -- see
+    # classify_full_arm_failures(). Only a probe explicitly declaring
+    # `"known_gap": true` may leave the denominator quietly; everything else
+    # is either a suspected broken instrument or unresolved, and both make
+    # the verdict below untrustworthy (exit code 3).
+    classified = classify_full_arm_failures(
         PROBES, a_full["results"], a_none["results"]
     )
-    inadmissible = genuine_gap + suspect_broken_instrument
+    inadmissible = (
+        classified.declared_gap
+        + classified.unresolved
+        + classified.suspect_broken_instrument
+    )
+    untrustworthy = classified.unresolved + classified.suspect_broken_instrument
 
-    if suspect_broken_instrument:
+    if classified.suspect_broken_instrument:
         print(
             "\n  ** PROBE INSTRUMENT SUSPECT ** -- full context FAILS, no-context "
-            "PASSES: " + ", ".join(suspect_broken_instrument)
+            "PASSES: " + ", ".join(classified.suspect_broken_instrument)
         )
         print(
             "    A less-informed answer scoring BETTER than a more-informed one "
             "on the same regex is the signature of a broken regex, not a content "
-            "gap. Do NOT read this as 'the context has a gap' -- read the actual "
-            "FULL-arm answers in the results file before trusting anything below. "
-            "See issue #3 for the shape of this exact defect."
+            "gap. Read the actual FULL-arm answers in the results file before "
+            "trusting anything below."
         )
-    if genuine_gap:
+    if classified.unresolved:
         print(
-            "  EXCLUDED (full context fails these, no-context arm fails them too "
-            "-- a genuine gap, not a loss): " + ", ".join(genuine_gap)
+            "\n  ** UNRESOLVED ** -- both arms fail, probe not declared a known "
+            "gap: " + ", ".join(classified.unresolved)
+        )
+        print(
+            "    NOTHING HERE DISTINGUISHES 'the context genuinely does not "
+            "carry this' from 'the regex rejects correct answers'. Both arms "
+            "failing is exactly what a badly-broken regex looks like -- it is "
+            "what main's removal-burden did, scoring 0/5 against five correct "
+            "answers -- so this harness does not guess. READ THE FULL-ARM "
+            "ANSWERS. If they are correct, the probe is broken. If the context "
+            'really is silent on this, add "known_gap": true with a reason to '
+            "probes/context-probes.json and the exclusion becomes reviewable."
+        )
+    if classified.declared_gap:
+        print(
+            '  EXCLUDED (declared "known_gap": true -- a human read the answers '
+            "and recorded that the context does not carry this): "
+            + ", ".join(classified.declared_gap)
         )
     if over:
         print(
@@ -402,24 +460,29 @@ def main() -> int:
                 "reduced": a_red,
                 "admissible": [p["id"] for p in admissible],
                 "inadmissible": inadmissible,
-                "genuine_gap": genuine_gap,
-                "suspect_broken_instrument": suspect_broken_instrument,
+                "declared_gap": classified.declared_gap,
+                "unresolved": classified.unresolved,
+                "suspect_broken_instrument": classified.suspect_broken_instrument,
                 "lost": lost,
                 "chars_saved": saved,
                 "accept": accept,
+                # False whenever any full-arm failure was neither declared nor
+                # explained. Read this BEFORE `accept`.
+                "verdict_trustworthy": not untrustworthy,
             },
             indent=2,
         )
     )
     print(f"\n  wrote {out}")
 
-    if suspect_broken_instrument:
+    if untrustworthy:
         print(
-            "\n  ABORT-AFTER-RUN -- probe instrument suspect for "
-            f"{', '.join(suspect_broken_instrument)} (see above). "
-            "The accept/reject verdict above is NOT trusted until the probe is "
-            "fixed or the suspicion is ruled out -- a probe that fails while its "
-            "answers are correct must not be able to delete itself quietly."
+            "\n  VERDICT NOT TRUSTED -- unaccounted-for full-arm failures: "
+            f"{', '.join(untrustworthy)}. "
+            "A probe that fails while its answers are correct must not be able "
+            "to delete itself from the denominator quietly, and this harness "
+            "cannot tell that case apart from a real gap on its own. Read the "
+            "full-arm answers, then either fix the probe or declare the gap."
         )
         return 3
 

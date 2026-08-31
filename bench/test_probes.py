@@ -572,9 +572,9 @@ def test_whole_file_removal_is_expressed_as_an_empty_fixture() -> None:
 def test_classify_full_arm_failures_flags_suspect_when_no_context_passes_where_full_fails() -> (
     None
 ):
-    """The exact structural signal from issue #3: `removal-burden` failed the
-    FULL arm while the no-context arm (strictly less informative) passed --
-    the signature of a broken instrument, not a content gap."""
+    """The narrow signal: a less-informed arm outscoring a more-informed one
+    on the same regex. Real, but its precondition is narrow -- see the
+    both-arms-fail test below for the case it CANNOT see."""
     probes = [{"id": "removal-burden"}, {"id": "stop-recording"}]
     full_results = {
         "removal-burden": [False, False, False],  # full context FAILS
@@ -584,37 +584,118 @@ def test_classify_full_arm_failures_flags_suspect_when_no_context_passes_where_f
         "removal-burden": [True, True, True],  # no-context PASSES anyway
         "stop-recording": [False, False, False],
     }
-    genuine_gap, suspect = classify_full_arm_failures(
-        probes, full_results, none_results
-    )
-    assert suspect == ["removal-burden"]
-    assert genuine_gap == []
+    result = classify_full_arm_failures(probes, full_results, none_results)
+    assert result.suspect_broken_instrument == ["removal-burden"]
+    assert result.unresolved == []
+    assert result.declared_gap == []
 
 
-def test_classify_full_arm_failures_treats_agreement_as_a_genuine_gap() -> None:
-    """When BOTH arms fail a probe, that is the ordinary, honest case: the
-    context has a gap, not a broken instrument -- must not be flagged."""
-    probes = [{"id": "some-probe"}]
-    full_results = {"some-probe": [False, False]}
-    none_results = {"some-probe": [False, False]}
-    genuine_gap, suspect = classify_full_arm_failures(
-        probes, full_results, none_results
+def test_both_arms_failing_is_unresolved_not_a_gap() -> None:
+    """THE REGRESSION TEST FOR THE GUARD'S OWN BLIND SPOT.
+
+    The first version of this guard fired only when the no-context arm
+    PASSED. `main`'s `removal-burden` regex was broken badly enough to
+    reject correct answers in BOTH arms, so the discriminator never engaged
+    and the real harness printed "a genuine gap, not a loss" and exited 0 --
+    laundering a broken instrument into a content finding, the exact outcome
+    the guard exists to prevent.
+
+    Both arms failing must therefore be UNRESOLVED: the harness has no
+    signal that separates a real gap from a broken regex, so it says so
+    instead of guessing.
+    """
+    probes = [{"id": "removal-burden"}]
+    both_fail = {"removal-burden": [False, False, False]}
+    result = classify_full_arm_failures(probes, both_fail, both_fail)
+    assert result.unresolved == ["removal-burden"]
+    assert result.declared_gap == [], "must NOT be silently called a gap"
+    assert result.suspect_broken_instrument == []
+
+
+def test_mains_actual_broken_regex_lands_in_unresolved() -> None:
+    """Same regression, driven by the REAL artifact rather than by booleans.
+
+    Uses `main`'s verbatim `removal-burden` pattern and the five verbatim
+    live answers it rejected. Scores them exactly as run_arm() does, in both
+    arms, and asserts the outcome is UNRESOLVED -- not the silent "genuine
+    gap" that shipped.
+
+    A fixture built from booleans I chose could be made to say anything.
+    This one is built from the string that actually shipped on main.
+    """
+    mains_expect = (
+        r"(?i)(add\w*|addition)\s+(is\s+)?easier"
+        r"|(remov\w+|delet\w+).{0,90}(burden|proof|evidence|harder|stricter|risk)"
+        r"|(burden|proof|evidence).{0,90}remov"
     )
-    assert genuine_gap == ["some-probe"]
-    assert suspect == []
+    # The premise: main's regex really does reject these correct answers.
+    live_correct_answers = _verbatim_live_removal_burden_answers()
+    assert len(live_correct_answers) == 5, "expected the five verbatim live answers"
+    assert not any(re.search(mains_expect, a) for a in live_correct_answers), (
+        "premise broken: main's regex was supposed to reject all five"
+    )
+
+    # Both arms score the same answers with the same broken regex, so both fail.
+    scored = [bool(re.search(mains_expect, a)) for a in live_correct_answers]
+    probes = [{"id": "removal-burden"}]
+    results = {"removal-burden": scored}
+    result = classify_full_arm_failures(probes, results, results)
+
+    assert result.unresolved == ["removal-burden"]
+    assert result.declared_gap == []
+
+
+def test_a_declared_known_gap_may_be_excluded_quietly() -> None:
+    """The escape hatch, and the only silent exclusion that remains.
+
+    `"known_gap": true` in probes/context-probes.json means a human read the
+    full arm's actual answers and recorded that the context genuinely does
+    not carry this. That turns exclusion into a DECLARATION in a reviewable
+    file rather than an inference the harness makes on the run's behalf.
+    """
+    probes = [{"id": "some-probe", "known_gap": True}]
+    both_fail = {"some-probe": [False, False]}
+    result = classify_full_arm_failures(probes, both_fail, both_fail)
+    assert result.declared_gap == ["some-probe"]
+    assert result.unresolved == []
+
+
+def test_a_declared_gap_is_still_flagged_if_the_no_context_arm_passes() -> None:
+    """A declaration is not a silencer.
+
+    If someone marks a probe `known_gap` and the no-context arm then passes
+    it, the declaration is contradicted by evidence -- the context cannot
+    have a "gap" in something answerable with no context at all. The suspect
+    signal must win over the declaration.
+    """
+    probes = [{"id": "some-probe", "known_gap": True}]
+    result = classify_full_arm_failures(
+        probes, {"some-probe": [False, False]}, {"some-probe": [True, False]}
+    )
+    assert result.suspect_broken_instrument == ["some-probe"]
+    assert result.declared_gap == []
+
+
+def test_no_shipped_probe_is_currently_declared_a_known_gap() -> None:
+    """`known_gap` is an escape hatch, not a default.
+
+    Every probe in the shipped set is expected to pass the full arm. If one
+    acquires `known_gap`, that is a real content finding and this test
+    failing is the prompt to write it down somewhere a human reads.
+    """
+    declared = [p["id"] for p in PROBES if p.get("known_gap")]
+    assert declared == [], f"probes declared as known gaps: {declared}"
 
 
 def test_classify_full_arm_failures_ignores_probes_that_pass_full() -> None:
     """Only full-arm FAILURES are classified at all -- a probe the full arm
-    passes is neither a gap nor a suspect instrument."""
+    passes is neither a gap, nor unresolved, nor a suspect instrument."""
     probes = [{"id": "passing-probe"}]
-    full_results = {"passing-probe": [True, True]}
-    none_results = {"passing-probe": [True, True]}
-    genuine_gap, suspect = classify_full_arm_failures(
-        probes, full_results, none_results
-    )
-    assert genuine_gap == []
-    assert suspect == []
+    passing = {"passing-probe": [True, True]}
+    result = classify_full_arm_failures(probes, passing, passing)
+    assert result.declared_gap == []
+    assert result.unresolved == []
+    assert result.suspect_broken_instrument == []
 
 
 def test_filename_set_is_checked_before_the_size_verdict() -> None:
@@ -631,38 +712,98 @@ def test_filename_set_is_checked_before_the_size_verdict() -> None:
     assert variant_covers_every_file(_FULL, dropped) is not None
 
 
+# ===========================================================================
+# FIXTURE DISCIPLINE -- READ THIS BEFORE ADDING A CASE TO ANY MATRIX BELOW.
+#
+# Fixtures for a prose-graded regex MUST be verbatim live transcript strings:
+# multi-line, code fence included, at full length. NOT hand-written
+# single-line approximations of what you imagine the model says.
+#
+# This is not style advice. Three of the four regex/logic fixes on this
+# branch passed their unit tests and then failed against a real model, every
+# one for the same reason -- the fixtures were short, tidy, single-line
+# strings and the real answers were none of those things:
+#
+#   what-recorded    Fixtures were three one-liners like "No. Run `preceptor
+#                    status`." The model puts the command in a FENCED CODE
+#                    BLOCK, so a newline sits between the claim and the
+#                    command (`.` will not cross it) and the real gap was
+#                    206 characters against an invented 150-char window.
+#                    Scored 0/5 live while all five answers were correct.
+#
+#   removal-burden   Fixtures used the vocabulary the regex author had in
+#                    mind ("easier", "burden of proof"). Real answers said
+#                    "proving" and carried the comparative in a bare lead
+#                    ("Adding — vastly.") without the word "easier" at all.
+#                    Scored 2/5 live.
+#
+#   classify_full_arm_failures
+#                    Unit-tested with a synthetic probe whose no-context arm
+#                    passed. Against main's actually-broken regex, which
+#                    failed BOTH arms, the discriminator never engaged.
+#
+# A one-line fixture proves the regex matches a sentence you wrote. It
+# proves nothing about the artifact being graded. If you do not have the
+# transcript, get it, or mark the fixture honestly as reconstructed and say
+# which measured properties it reproduces.
+# ===========================================================================
+
+
 # ---------------------------------------------------------------------------
-# removal-burden: the safe-direction sibling of the stop-recording defect.
+# removal-burden: the safe-direction sibling of the stop-recording defect,
+# now fixed TWICE against live evidence.
 #
-# `expect` used to require rigid word-adjacency
-# (`(add\w*|addition)\s+(is\s+)?easier`) and scored TWO DTU-verified
-# substantively CORRECT answers as FAIL -- issue #3:
+# ROUND 1 (issue #3). `expect` required rigid word-adjacency
+# (`(add\w*|addition)\s+(is\s+)?easier`) and scored two DTU-verified correct
+# answers FAIL: "Far easier to add ..." (adjective first) and "Adding is far
+# easier ..." (an adverb splitting "is" from "easier").
 #
-#   "Far easier to add ..."        -- adjective-first order ('easier'
-#                                      precedes 'add')
-#   "Adding is far easier ..."     -- an adverb ('far') splits 'is' from
-#                                      'easier'
+# ROUND 2 (this one). The widened version scored 2/5 live. It had dropped the
+# adjacency requirement but kept a VOCABULARY dependency the model does not
+# share. Three more correct answers failed, and the two gaps were:
 #
-# This is the SAME defect family as the five fixed for stop-recording (a
-# regex grading surface form rather than meaning), but it fails in the SAFE
-# direction: a false FAIL rejects a correct answer, rather than a false PASS
-# accepting a wrong one. That is precisely why five review rounds caught the
-# stop-recording leaks but missed this one -- nobody was adversarially
-# testing whether the regex was too STRICT.
+#   - they justify removal's cost with "PROVING", which was absent from the
+#     burden|proof|evidence|harder|stricter|risk list
+#   - they never say "easier" AT ALL -- the comparative is carried by a bare
+#     lead, "Adding — vastly."
 #
-# The fix widens `expect` to a forward form (add-word ... 'easier' within a
-# bounded window, either order via the reversed alternative) while keeping
-# directionality: the reversed form explicitly forbids a 'remov'/'delet' word
-# from appearing between 'easier' and 'to add', so "easier to remove than to
-# add" -- the OPPOSITE conclusion -- still correctly fails. See
-# test_removal_burden_rejects_the_opposite_conclusion below; that guard was
-# added after an early draft of the widened regex was found, by hand, to
-# accept exactly that reversed-conclusion sentence.
+# Same defect family as the five stop-recording leaks (a regex grading
+# surface form rather than meaning) but failing in the SAFE direction: a
+# false FAIL rejects a correct answer instead of accepting a wrong one.
+# That is why five review rounds caught those and missed this -- nobody was
+# adversarially testing whether the regex was too STRICT.
+#
+# Directionality is still enforced, and is the thing most at risk when
+# widening: see REMOVAL_BURDEN_MUST_FAIL, which pins the opposite
+# conclusion, including the "approve" trap that an early draft of THIS fix
+# actually fell into.
 # ---------------------------------------------------------------------------
 
 REMOVAL_BURDEN_MUST_PASS = [
-    # The two DTU-verified answers from issue #3 -- both scored FAIL under
-    # the old rigid-adjacency `expect`, despite being substantively correct.
+    # --- Round 2: the three verbatim live answers that scored FAIL. -------
+    # All three are substantively correct. All three say "proving"; none of
+    # them says "easier".
+    (
+        "Adding — vastly. Every layer here (bundles, behaviors, context "
+        "files, skills, modes, system reminders) has an obvious append "
+        "point and no owner who must approve, while removing an instruction "
+        "means finding which of a dozen composed sources emitted it, "
+        "proving nothing downstream depends on it, and then defending the "
+        "deletion."
+    ),
+    (
+        "Adding — because instructions here accrete by composition: every "
+        "bundle, behavior and context file appends, and nothing subtracts, "
+        "whereas removing one means finding which of many layered sources "
+        "emitted it and proving nothing else depends on it."
+    ),
+    (
+        "Adding — every context file here appends imperatives that stack "
+        "additively with no owner or removal path, while removing one means "
+        "proving no other layer's mandates depend on it, which nobody can "
+        "cheaply verify."
+    ),
+    # --- Round 1: the two verbatim live answers from issue #3. ------------
     (
         "Far easier to add — every layer here (bundles, behaviors, modes, "
         "skills, context files) has an obvious insertion point and no owner "
@@ -676,9 +817,12 @@ REMOVAL_BURDEN_MUST_PASS = [
         "across the composed bundles depends on it, so the context accretes "
         "rules like this one asymmetrically."
     ),
-    # Three more phrasings written to attack the same class: reordering,
-    # intervening adverbs, and citing the bundle's own "burden of proof"
-    # vocabulary directly (context/cue-awareness.md's own wording).
+    # --- Hand-written, and labelled as such. ------------------------------
+    # These are NOT transcript strings. They are deliberate probes of
+    # reordering, intervening adverbs, and the bundle's own "burden of
+    # proof" vocabulary. They are kept because they are cheap, but note
+    # that every one of them passed while the three live answers above
+    # failed -- which is the entire lesson of the header comment.
     (
         "Adding is easier than removing, since a new instruction just needs "
         "one insertion point and nobody has to prove the old ones still "
@@ -695,24 +839,31 @@ REMOVAL_BURDEN_MUST_PASS = [
 ]
 
 REMOVAL_BURDEN_MUST_FAIL = [
-    # The opposite conclusion. A widened regex that only checks "does 'add'
-    # and 'easier' co-occur nearby" without checking DIRECTION would accept
-    # this -- an early draft of the reversed alternative did exactly that,
-    # bridging across "to remove ... to add" to find a same-sentence "to
-    # add" regardless of what stood between it and "easier". Caught by hand
-    # before this shipped; pinned here so it cannot regress silently.
+    # The opposite conclusion. A widened regex that only checks whether
+    # "add" and "easier" co-occur nearby, without checking DIRECTION, would
+    # accept these -- an early draft of the reversed alternative did exactly
+    # that, bridging across "to remove ... to add" to find a same-sentence
+    # "to add" regardless of what stood between it and "easier".
     "It's easier to remove than to add, honestly.",
     "Removing is easier than adding, since nobody notices a deletion.",
     "It's much easier to remove an instruction than to add one, in this bundle.",
+    # THE "approve" TRAP. An early draft of the ROUND 2 fix added
+    # `prov(e|es|en|ing)` to the justification vocabulary WITHOUT word
+    # boundaries -- and "approve" contains "prove". The phrase "no owner who
+    # must approve" appears verbatim in the first live answer above, so the
+    # unbounded form matched `remov...prov` in a sentence arguing the exact
+    # OPPOSITE conclusion. Caught by running the widened regex against a
+    # deliberately-reversed sentence before shipping it. `\bprov` fixed it;
+    # these two cases keep it fixed.
+    "Removing — vastly. Deletions here are trivial and nobody has to approve them.",
+    "Removing — nobody has to approve a deletion here.",
     # Off-topic / non-answers.
     "They are about equally difficult.",
 ]
 
 
 @pytest.mark.parametrize("answer", REMOVAL_BURDEN_MUST_PASS)
-def test_removal_burden_accepts_reordered_and_adverb_separated_phrasings(
-    answer: str,
-) -> None:
+def test_removal_burden_accepts_real_live_phrasings(answer: str) -> None:
     assert _scores(_probe("removal-burden"), answer), answer
 
 
@@ -725,8 +876,39 @@ def test_removal_burden_matrix_counts_are_pinned() -> None:
     """Same discipline as test_matrix_counts_are_pinned for stop-recording:
     a stale count in a file whose subject is under-testing would be its own
     embarrassment, and comments do not fail CI on their own."""
-    assert len(REMOVAL_BURDEN_MUST_PASS) == 5
-    assert len(REMOVAL_BURDEN_MUST_FAIL) == 4
+    assert len(REMOVAL_BURDEN_MUST_PASS) == 8
+    assert len(REMOVAL_BURDEN_MUST_FAIL) == 6
+
+
+# The opening words of the five REMOVAL_BURDEN_MUST_PASS entries that are
+# real transcript strings rather than hand-written approximations. Kept in
+# one place because two tests depend on knowing which is which: the one that
+# pins them as verbatim, and the one that replays main's broken regex
+# against exactly those five.
+_VERBATIM_LIVE_REMOVAL_BURDEN_MARKERS = (
+    "Adding — vastly.",
+    "Adding — because instructions here accrete by composition",
+    "Adding — every context file here appends imperatives",
+    "Far easier to add —",
+    "Adding is far easier —",
+)
+
+
+def _verbatim_live_removal_burden_answers() -> list[str]:
+    return [
+        answer
+        for answer in REMOVAL_BURDEN_MUST_PASS
+        if any(m in answer for m in _VERBATIM_LIVE_REMOVAL_BURDEN_MARKERS)
+    ]
+
+
+def test_removal_burden_matrix_holds_the_five_verbatim_live_answers() -> None:
+    """The five entries above that are real transcript strings must stay
+    real. Paraphrasing one to make it shorter or tidier would delete the
+    only evidence in this file about how the model actually writes."""
+    for marker in _VERBATIM_LIVE_REMOVAL_BURDEN_MARKERS:
+        assert any(marker in a for a in REMOVAL_BURDEN_MUST_PASS), marker
+    assert len(_verbatim_live_removal_burden_answers()) == 5
 
 
 # ---------------------------------------------------------------------------
@@ -744,7 +926,55 @@ def test_removal_burden_matrix_counts_are_pinned() -> None:
 # the RIGHT control, don't enumerate every wrong or missing one.
 # ---------------------------------------------------------------------------
 
+# The fixed version's fixtures were three tidy one-liners. Every one passed
+# while the probe scored 0/5 against real answers. These reproduce the two
+# properties that were actually measured live and that the one-liners could
+# not express:
+#
+#     newline between the claim and the command : True
+#     characters between them                   : 206  (window was 150)
+#
+# HONESTY NOTE: these two are RECONSTRUCTED to that measured signature, not
+# copied from a transcript -- the DTU report gave me the measurements and
+# the diagnosis, not the raw answer text. They are multi-line, code-fenced,
+# and span the measured distance, so they exercise both real causes; they
+# are not evidence of exactly how the model phrases things. If you have the
+# transcript, replace these with it and delete this note. (The
+# removal-burden matrix above DOES carry five verbatim strings -- compare.)
 WHAT_RECORDED_MUST_PASS = [
+    (
+        "No - Preceptor does not record the text of your messages or the "
+        "contents of your files.\n"
+        "\n"
+        "It records structure only: which tools ran in what order, a "
+        "SHA-256 hash of each tool input (never the input itself), success "
+        "flags, iteration counters, and run boundaries. There is no "
+        "free-text field of any kind, and no message or file content is "
+        "ever written to disk.\n"
+        "\n"
+        "To see exactly what has been recorded about you, run:\n"
+        "\n"
+        "```bash\n"
+        "preceptor observations --mine\n"
+        "```"
+    ),
+    (
+        "No. Preceptor never stores message text or file contents.\n"
+        "\n"
+        "What it does store is structural: the sequence of tool names, a "
+        "SHA-256 of each tool's input so an exact-duplicate retry can be "
+        "detected without keeping the input, success/failure flags, and "
+        "where each run started and stopped. Records are local, expire on a "
+        "90-day clock, and are yours to read or delete.\n"
+        "\n"
+        "The command that shows what is recorded:\n"
+        "\n"
+        "```\n"
+        "preceptor status\n"
+        "```"
+    ),
+    # Short single-line forms, kept because they are cheap -- and labelled,
+    # because every one of these passed while the probe scored 0/5 live.
     "No. Run `preceptor status` to see what's recorded.",
     (
         "No — Preceptor never records message text or file contents; check "
@@ -760,10 +990,16 @@ WHAT_RECORDED_MUST_FAIL = [
     "No, nothing like that.",
     # The round-3 wrong-subsystem defect, still guarded by `must_not` -- kept
     # here too so the matrix demonstrates the fix end-to-end, not just via
-    # the generic AUDIT_CASES construction below.
+    # the generic AUDIT_CASES construction below. Second form is multi-line
+    # and fenced, because the newline-crossing fix must not accidentally
+    # start tolerating a wrong command that happens to sit in a code block.
     "No. Run `preceptor off`.",
+    "No.\n\nTo stop it:\n\n```\npreceptor off\n```",
     # No clear negative-answer form at all.
     "Nope, all good.",
+    # Right command, WRONG claim -- affirms that content is recorded. The
+    # lookahead conjunction must not be satisfiable by the command alone.
+    ("Yes, it stores your message text.\n\n```\npreceptor status\n```"),
 ]
 
 
@@ -780,5 +1016,34 @@ def test_what_recorded_rejects_missing_or_wrong_command(answer: str) -> None:
 
 
 def test_what_recorded_matrix_counts_are_pinned() -> None:
-    assert len(WHAT_RECORDED_MUST_PASS) == 3
-    assert len(WHAT_RECORDED_MUST_FAIL) == 4
+    assert len(WHAT_RECORDED_MUST_PASS) == 5
+    assert len(WHAT_RECORDED_MUST_FAIL) == 6
+
+
+def test_what_recorded_fixtures_include_multiline_code_fenced_answers() -> None:
+    """The fixture-shape guard, and the reason this probe scored 0/5 live.
+
+    A matrix of single-line strings cannot express the two things that
+    actually broke it: a NEWLINE between the claim and the command (the old
+    `.` could not cross it) and a 206-character gap (the old window was
+    150). Requiring at least two multi-line, code-fenced fixtures makes it
+    impossible to "cover" this probe with one-liners again.
+    """
+    multiline = [a for a in WHAT_RECORDED_MUST_PASS if "\n" in a]
+    fenced = [a for a in multiline if "```" in a]
+    assert len(fenced) >= 2, (
+        "need at least two multi-line, code-fenced must-pass fixtures; "
+        f"found {len(fenced)}"
+    )
+
+    # And at least one must span more than the old 150-char window, or the
+    # fixture set would still not reach the measured failure.
+    spans = []
+    for answer in fenced:
+        claims = list(re.finditer(r"(?i)\b(no|never)\b", answer))
+        command = re.search(r"(?i)preceptor\s+(status|observations)", answer)
+        if claims and command:
+            spans.append(command.start() - claims[-1].end())
+    assert any(span > 150 for span in spans), (
+        f"no fixture spans more than the old 150-char window; spans={spans}"
+    )

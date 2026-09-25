@@ -399,6 +399,53 @@ logger to CRITICAL unless `--verbose`.
 
 ---
 
+## Per-request and per-event footprint — `bench/footprint.py`
+
+Start-up is paid once; these two are paid on **every step of every task**:
+prompt tokens re-sent on every provider request, and hook work done in-band on
+every event. `bench/footprint.py` measures both at the code level (minimal fake
+coordinator, loop-streaming-shaped payloads, worst-case 1 MB / 10 MB
+`tool_input`), no session, nothing installed. `--repo` compares any checkout.
+
+```bash
+uv run --no-project --with amplifier-core --with pyyaml python bench/footprint.py
+```
+
+2026-09-24, macOS arm64, full loop (`behaviors/preceptor.yaml`), before → after
+`perf/session-footprint`:
+
+| per request (chars/4) | before | after |
+|---|---|---|
+| context files | 542 | 542 |
+| agent descriptions (as tool-delegate renders them) | 1044 | 345 |
+| `preceptor` tool schema + description (read-only instance) | 567 | 259 |
+| **total** | **2153** | **1146** |
+
+chars/4 is an estimate, not a provider tokenizer count; the relative saving
+is the robust number. `context/cue-awareness.md` is deliberately **not**
+trimmed: a context-file reduction needs a `probe_context.py` ACCEPT (see the
+ablation below), and none has been run for further trimming. The agent
+descriptions only lost `<example>` blocks (banned by foundation's
+`AGENT_AUTHORING.md`) and optional "Authoritative on" lists.
+
+| per event, observer enabled (mean µs) | before | after |
+|---|---|---|
+| tool:pre / tool:post, small input | ~11 (p99 ~210) | ~3–5 (p99 ~8–13) |
+| tool:pre / tool:post, 1 MB input | ~1700 each | ~4–6 |
+| tool:pre, 10 MB input | ~16 000 | ~3 |
+| provider:request / response | ~9 (p99 ~200) | ~2 (p99 ~4) |
+| injector, first provider:request, 8 active cues of 60 | ~3700 | ~660 |
+| injector, every later provider:request | 0.7 | 0.2 |
+
+Import times printed by the script are cold-interpreter only; a live host
+has already imported `yaml` and `concurrent.futures`.
+
+The observer ships disabled in the full loop and then registers **no**
+handlers; the numbers above are for observe-on / `PRECEPTOR_ENABLED=1`.
+Large-input hashing and the mid-turn flush moved to a background writer, so
+their CPU still exists (total for a 1 MB pre+post pair: ~3300 → ~1700 µs, the
+halving is pre/post digest reuse) but is no longer charged to the step.
+
 ## Context ablation — and a gate that was measuring noise
 
 `bench/probe_context.py` ablates the always-on context files and measures what

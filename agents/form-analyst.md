@@ -2,29 +2,11 @@
 meta:
   name: form-analyst
   description: |
-    Reads raw trajectory observation records and reports what the agent's FORM actually
-    was — how it sequenced tools, where it retried, where it re-read, how it recovered,
-    where it appears to have arbitrated between conflicting instructions. Proposes
-    candidate cues ONLY from failures that actually occurred, with observation ids
-    attached.
-
-    Use when: analyzing accumulated observation records, investigating why a session went
-    badly, or generating cue candidates for the skeptic to attack.
-
-    **Authoritative on:** form vs. outcome, observation record interpretation, signal
-    classification, cue candidacy, trigger-condition detection.
-
-    This agent PROPOSES. It has no write access to the ledger and cannot promote, retire,
-    or delete anything.
-
-    <example>
-    <context>Two weeks of observe-only records have accumulated</context>
-    <user>What patterns are in the preceptor observations for the python domain?</user>
-    <assistant>I'll delegate to preceptor:form-analyst to read the records and report the
-    form patterns before anyone proposes a correction.</assistant>
-    <commentary>Reading trajectories is this agent's whole job, and it keeps the token cost
-    of scanning thousands of JSONL records out of the parent session.</commentary>
-    </example>
+    Reads raw trajectory observation records and reports the agent's FORM: tool
+    sequencing, retries, re-reads, recovery, instruction arbitration. Proposes candidate
+    cues ONLY from failures that actually occurred, with observation ids attached; has no
+    ledger write access. Use to analyze accumulated records, investigate why a session
+    went badly, or generate cue candidates for preceptor:skeptic.
   model_role: reasoning
 
 tools:

@@ -95,12 +95,36 @@ retention failure is logged and never blocks the session from starting.
 Handlers run sequentially and in-band with the rest of the session, so
 records are buffered in memory and only written to disk at these points:
 
-- The buffer reaches `flush_every` records.
-- An `execution:end` or `cancel:requested` event fires.
+- The buffer reaches `flush_every` records. This mid-turn flush is handed
+  to a background writer and does **not** block the handler.
+- An `execution:end` or `cancel:requested` event fires. The handler blocks
+  until everything buffered is on disk, as before.
 - The session's registered cleanup callback runs at teardown (this is the
-  guaranteed final flush -- `session:end` is not relied upon, since on the
-  underlying runtime cleanups run *before* `session:end` is emitted, and it
-  is not emitted at all on abnormal termination).
+  guaranteed final flush, also blocking -- `session:end` is not relied upon,
+  since on the underlying runtime cleanups run *before* `session:end` is
+  emitted, and it is not emitted at all on abnormal termination).
+
+Hashing a large `tool_input` also runs on that writer instead of in the
+handler. "Large" is a cheap estimate, not a serialization: the lengths of
+the input's top-level string values, with **any** nested dict/list/tuple
+value counted as 4096 characters, so every input with a nested container
+(todo lists, edit arrays) takes the background path; a top-level list counts
+as large past 64 items. Inputs under 4096 estimated characters are hashed
+inline. `tool:post` reuses the digest computed for the matching `tool:pre`
+when it carries the same `tool_call_id` and the same arguments object. The
+writer is one shared thread, so jobs run strictly in order and every digest
+is the same bytes hashed the same way as before. Trade-off: a background
+digest is computed after any queued writer work (unbounded if the writer is
+stalled, e.g. on a slow disk) rather than during the event, so an input
+mutated in place before the hash job runs would hash its mutated form, and
+that digest is then reused for `tool:post`. Measure with
+`bench/footprint.py`.
+
+Durability trade-off: records past the `flush_every` threshold are in
+flight, not on disk, when the handler returns; a SIGKILL in that window
+loses them. The eager points and cleanup still block (capped at 10 s so a
+hung disk cannot hang the session), and on normal interpreter exit the
+writer drains its queue.
 
 A failure at any point (a bad flush, a malformed payload, a missing
 capability) is logged and never raised -- fail-open is absolute. Observation

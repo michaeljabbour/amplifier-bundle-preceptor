@@ -436,3 +436,76 @@ def test_every_shipped_entry_point_mounts_tool_preceptor() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__])
+
+
+# ---------------------------------------------------------------------------
+# Property narrowing: each instance advertises exactly the fields its
+# operations consume -- never fewer (that would hide a usable argument) and,
+# for the read-only instance in every full-loop session, not the eleven
+# write-only fields it would reject anyway.
+# ---------------------------------------------------------------------------
+
+
+def test_schema_properties_cover_every_advertised_operations_fields(
+    tmp_path: Path,
+) -> None:
+    from amplifier_module_tool_preceptor import _OPTIONAL_FIELDS, _REQUIRED_FIELDS
+
+    assert set(_OPTIONAL_FIELDS) <= set(_REQUIRED_FIELDS)
+    coordinator = _FakeCoordinator()
+    for cfg in ({}, {"surface": "consent"}, {"writable": True}):
+        tool = PreceptorTool(coordinator, {"root": str(tmp_path), **cfg})
+        props = tool.input_schema["properties"]
+        for op in props["operation"]["enum"]:
+            for field in _REQUIRED_FIELDS[op] + _OPTIONAL_FIELDS.get(op, ()):
+                assert field in props, f"{cfg}: {op!r} needs {field!r}"
+                assert props[field] == _INPUT_SCHEMA["properties"][field]
+
+
+def test_readonly_and_consent_schemas_drop_write_only_fields(tmp_path: Path) -> None:
+    coordinator = _FakeCoordinator()
+    readonly = PreceptorTool(coordinator, {"root": str(tmp_path)})
+    consent = PreceptorTool(coordinator, {"root": str(tmp_path), "surface": "consent"})
+    writable = PreceptorTool(coordinator, {"root": str(tmp_path), "writable": True})
+
+    write_only = {
+        "text",
+        "origin",
+        "cue_id",
+        "entry_evidence",
+        "exit_evidence",
+        "run",
+        "probes",
+        "verdict",
+        "n_per_arm",
+        "mean",
+        "variance",
+    }
+    assert not write_only & set(readonly.input_schema["properties"])
+    assert not write_only & set(consent.input_schema["properties"])
+    assert set(writable.input_schema["properties"]) == set(_INPUT_SCHEMA["properties"])
+    assert set(consent.input_schema["properties"]) == {
+        "operation",
+        "session_id",
+        "limit",
+        "since",
+    }
+
+
+@pytest.mark.asyncio
+async def test_narrowed_schema_does_not_narrow_execute(tmp_path: Path) -> None:
+    """Narrowing is advertisement only: a read-only instance still rejects a
+    write with the authority error (not a schema error), and still reads."""
+    tool = PreceptorTool(_FakeCoordinator(), {"root": str(tmp_path)})
+    denied = await tool.execute(
+        {
+            "operation": "pin_cue",
+            "provider": "a",
+            "model": "m",
+            "domain": "d",
+            "cue_id": "cue-001",
+        }
+    )
+    assert denied.success is False and "write access" in denied.error["message"]
+    ok = await tool.execute({"operation": "observations", "limit": 1})
+    assert ok.success is True

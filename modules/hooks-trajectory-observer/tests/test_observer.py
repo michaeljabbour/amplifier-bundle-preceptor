@@ -6,8 +6,14 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+import amplifier_module_hooks_trajectory_observer as observer_mod
 import pytest
-from amplifier_module_hooks_trajectory_observer import OBSERVED_EVENTS, mount
+from amplifier_module_hooks_trajectory_observer import (
+    OBSERVED_EVENTS,
+    _background,
+    _sha256_of,
+    mount,
+)
 
 
 def _make_coordinator(session_id: str = "sess-1") -> MagicMock:
@@ -27,6 +33,11 @@ def _registered_handler(coordinator: MagicMock):
     registrations (mount() registers the same closure for every event)."""
     assert coordinator.hooks.register.call_args_list, "no handlers were registered"
     return coordinator.hooks.register.call_args_list[0].args[1]
+
+
+def _wait_for_writer() -> None:
+    """Block until every job queued on the single-worker writer has run."""
+    _background().submit(lambda: None).result(timeout=10)
 
 
 def _observations_path(root: Path, session_id: str = "sess-1") -> Path:
@@ -258,6 +269,10 @@ async def test_buffer_flushes_on_flush_every_threshold(tmp_path: Path) -> None:
     assert not _observations_path(tmp_path).exists()
 
     await handler("tool:pre", {"tool_name": "b"})  # hits the threshold
+    # The threshold flush is fire-and-forget on the background writer (it is
+    # mid-turn, on the critical path); wait for the writer, NOT for cleanup
+    # or an eager flush, so this still pins that the threshold triggers it.
+    _wait_for_writer()
     assert len(_read_records(tmp_path)) == 2
 
 
@@ -465,3 +480,152 @@ async def test_missing_register_cleanup_degrades_gracefully(tmp_path: Path) -> N
     await mount(limited, {"enabled": True, "root": str(tmp_path)})
 
     assert limited.hooks.register.call_count == len(OBSERVED_EVENTS)
+
+
+# ---------------------------------------------------------------------------
+# Critical-path discipline: expensive work is off the in-band handler.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_threshold_flush_does_not_block_the_handler(tmp_path: Path) -> None:
+    """A mid-turn threshold flush must not wait for the disk. Hold the
+    writer hostage; the handler must still return, with nothing written."""
+    import threading
+
+    coordinator = _make_coordinator()
+    await mount(coordinator, {"enabled": True, "root": str(tmp_path), "flush_every": 2})
+    handler = _registered_handler(coordinator)
+
+    gate = threading.Event()
+    _background().submit(gate.wait, 10)
+    try:
+        await handler("tool:pre", {"tool_name": "a"})
+        result = await handler("tool:pre", {"tool_name": "b"})  # threshold
+        assert result.action == "continue"
+        assert not _observations_path(tmp_path).exists()
+    finally:
+        gate.set()
+    _wait_for_writer()
+    assert len(_read_records(tmp_path)) == 2
+
+
+@pytest.mark.asyncio
+async def test_eager_flush_still_blocks_until_durable(tmp_path: Path) -> None:
+    """execution:end keeps its durability guarantee even while the writer is
+    busy and a large input is still being hashed off-loop."""
+    coordinator = _make_coordinator()
+    await mount(
+        coordinator, {"enabled": True, "root": str(tmp_path), "flush_every": 999}
+    )
+    handler = _registered_handler(coordinator)
+
+    big = {"file_path": "/p", "content": "x" * 200_000}
+    await handler("tool:pre", {"tool_name": "write_file", "tool_input": big})
+    await handler("execution:end", {"status": "completed"})
+
+    records = _read_records(tmp_path)
+    assert [r["event"] for r in records] == ["tool:pre", "execution:end"]
+    assert records[0]["tool_input_sha256"] == _sha256_of(big)
+
+
+@pytest.mark.asyncio
+async def test_large_input_hash_identical_and_computed_once_for_pre_and_post(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Off-loop hashing must produce the byte-identical digest the inline
+    path always produced, and tool:post must reuse tool:pre's digest when
+    loop-streaming hands over the same arguments object."""
+    calls: list[int] = []
+    real = observer_mod._sha256_of
+
+    def counting(value):
+        calls.append(1)
+        return real(value)
+
+    monkeypatch.setattr(observer_mod, "_sha256_of", counting)
+
+    coordinator = _make_coordinator()
+    await mount(coordinator, {"enabled": True, "root": str(tmp_path)})
+    handler = _registered_handler(coordinator)
+
+    big = {"file_path": "/p", "content": "y" * 100_000}
+    small = {"file_path": "/q"}
+    await handler(
+        "tool:pre", {"tool_name": "w", "tool_call_id": "c1", "tool_input": big}
+    )
+    await handler(
+        "tool:pre", {"tool_name": "r", "tool_call_id": "c2", "tool_input": small}
+    )
+    await handler(
+        "tool:post", {"tool_name": "r", "tool_call_id": "c2", "tool_input": small}
+    )
+    await handler(
+        "tool:post",
+        {
+            "tool_name": "w",
+            "tool_call_id": "c1",
+            "tool_input": big,
+            "result": {"success": True},
+        },
+    )
+    await handler("execution:end", {"status": "completed"})
+
+    records = {(r["event"], r["tool_name"]): r for r in _read_records(tmp_path)}
+    assert records[("tool:pre", "w")]["tool_input_sha256"] == real(big)
+    assert records[("tool:post", "w")]["tool_input_sha256"] == real(big)
+    assert records[("tool:pre", "r")]["tool_input_sha256"] == real(small)
+    assert records[("tool:post", "r")]["tool_input_sha256"] == real(small)
+    assert len(calls) == 2, "each distinct input hashed exactly once"
+
+    # A DIFFERENT object under the same call id (e.g. a hook modified the
+    # input) is hashed afresh, never given the stale digest.
+    other = {"file_path": "/p", "content": "z" * 100_000}
+    await handler(
+        "tool:pre", {"tool_name": "w", "tool_call_id": "c3", "tool_input": big}
+    )
+    await handler(
+        "tool:post", {"tool_name": "w", "tool_call_id": "c3", "tool_input": other}
+    )
+    await handler("execution:end", {"status": "completed"})
+    posts = [r for r in _read_records(tmp_path) if r["event"] == "tool:post"]
+    assert posts[-1]["tool_input_sha256"] == real(other)
+
+
+@pytest.mark.asyncio
+async def test_cue_ids_seen_when_manifest_lands_on_first_provider_request(
+    tmp_path: Path,
+) -> None:
+    """The injector writes the dosing manifest on the first provider:request
+    (priority 20), after this session's first event (execution:start). A
+    read-once cache recorded [] forever; the second look must pick it up."""
+    coordinator = _make_coordinator()
+    await mount(coordinator, {"enabled": True, "root": str(tmp_path)})
+    handler = _registered_handler(coordinator)
+
+    await handler("execution:start", {})
+    manifest = tmp_path / "manifests" / "sess-1.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"cues": [{"id": "cue-001"}, {"id": "cue-002"}]}))
+    await handler("provider:request", {"provider": "anthropic"})
+    await handler("tool:pre", {"tool_name": "x"})
+    await handler("execution:end", {"status": "completed"})
+
+    by_event = {r["event"]: r for r in _read_records(tmp_path)}
+    assert by_event["execution:start"]["cue_ids_dosed"] == []
+    assert by_event["provider:request"]["cue_ids_dosed"] == ["cue-001", "cue-002"]
+    assert by_event["tool:pre"]["cue_ids_dosed"] == ["cue-001", "cue-002"]
+
+
+@pytest.mark.asyncio
+async def test_resumed_session_manifest_read_on_first_event(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifests" / "sess-1.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"cues": [{"id": "cue-009"}]}))
+
+    coordinator = _make_coordinator()
+    await mount(coordinator, {"enabled": True, "root": str(tmp_path)})
+    handler = _registered_handler(coordinator)
+    await handler("execution:start", {})
+    await handler("execution:end", {"status": "completed"})
+    assert all(r["cue_ids_dosed"] == ["cue-009"] for r in _read_records(tmp_path))

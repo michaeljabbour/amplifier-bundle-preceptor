@@ -343,3 +343,36 @@ async def test_max_active_cues_enforced(tmp_path: Path) -> None:
 
     assert result.action == "inject_context"
     assert result.context_injection.count("[cue:") == 5
+
+
+# ---------------------------------------------------------------------------
+# Fast-path parser: must be the same SAFE subset as yaml.safe_load.
+# ---------------------------------------------------------------------------
+
+
+def test_fast_loader_matches_safe_load_and_stays_safe() -> None:
+    from amplifier_module_hooks_cue_injector import _load_yaml
+
+    text = yaml.safe_dump(
+        {
+            "version": 7,
+            "cues": [
+                {
+                    "id": "cue-001",
+                    "status": "active",
+                    "text": "Run tests — then report.",
+                },
+                {
+                    "id": "cue-002",
+                    "status": "shadow",
+                    "text": "x",
+                    "since": "2026-09-24",
+                },
+            ],
+        },
+        allow_unicode=True,
+    )
+    assert _load_yaml(text) == yaml.safe_load(text)
+
+    with pytest.raises(yaml.YAMLError):
+        _load_yaml("!!python/object/apply:os.system ['echo pwned']")

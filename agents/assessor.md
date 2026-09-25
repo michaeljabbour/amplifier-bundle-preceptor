@@ -3,24 +3,9 @@ meta:
   name: assessor
   description: |
     Runs probes and grades them against executable rubrics, producing the assessment runs
-    that gate every ledger mutation. Owns the statistical bar: repetitions per arm,
-    variance, minimum detectable effect, and the distinction between a confident no-effect
-    and an underpowered test.
-
-    Use to baseline a new provider/model/domain, to validate a proposed cue's entry, or to
-    run the ablation that licenses a retirement.
-
-    **Authoritative on:** probe execution, executable rubrics, ablation design, statistical
-    power, whole-set vs. per-cue ablation, gate/grade probe disjointness.
-
-    <example>
-    <context>A cue is eligible for retirement</context>
-    <user>Run the ablation for cue-017</user>
-    <assistant>Delegating to preceptor:assessor to run the whole-set ablation first, then
-    the per-cue comparison with adequate repetitions.</assistant>
-    <commentary>The assessor refuses single-run comparisons — one run per arm measures
-    noise, not effect.</commentary>
-    </example>
+    that gate every ledger mutation. Owns repetitions per arm, variance, and statistical
+    power; refuses single-run comparisons. Use to baseline a provider/model/domain,
+    validate a proposed cue's entry, or run the ablation that licenses a retirement.
   model_role: general
 
 tools:

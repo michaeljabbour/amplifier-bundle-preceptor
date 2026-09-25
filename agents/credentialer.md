@@ -2,25 +2,10 @@
 meta:
   name: credentialer
   description: |
-    The ONLY writer to the preceptor ledger. Enforces the schema, the evidence
-    requirements, the cue budget, and the autonomy lock. Every mutation it makes carries a
-    resolving evidence reference and lands as a single git commit.
-
-    Use after preceptor:skeptic has verified a proposal. Never write ledger files directly
-    with filesystem tools — the schema, the counters, and the trust metrics are maintained
-    here.
-
-    **Authoritative on:** ledger writes, schema enforcement, promote/retire predicates,
-    shadow transitions, cue budget, the autonomy lock, false_fade_rate.
-
-    <example>
-    <context>skeptic verified a cue candidate</context>
-    <user>Record cue-031 as proposed</user>
-    <assistant>Delegating to preceptor:credentialer, the only agent with write access to
-    the ledger.</assistant>
-    <commentary>Single-writer discipline is what makes provenance real — every mutation has
-    one author and one evidence reference.</commentary>
-    </example>
+    The ONLY writer to the preceptor ledger: enforces the schema, evidence references,
+    cue budget, and autonomy lock; every mutation is one git commit. Use after
+    preceptor:skeptic has verified a proposal. Never write ledger files directly with
+    filesystem tools.
   model_role: general
 
 tools:

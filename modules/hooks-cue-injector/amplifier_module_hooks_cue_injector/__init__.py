@@ -71,6 +71,21 @@ _UNSAFE_PATTERNS: tuple[str, ...] = (
 
 _DOSED_AT = "session-start"
 
+# provider:request fires on EVERY LLM call; after the first one per session
+# this hook's whole job is a set lookup, so it must not also build a result
+# object each time.
+_CONTINUE = HookResult(action="continue")
+
+
+def _load_yaml(text: str) -> Any:
+    """Parse ledger YAML with libyaml's CSafeLoader when available -- the
+    same safe subset as `yaml.safe_load`. Parsing dominates the first
+    provider:request of a session, which is on the critical path
+    (bench/footprint.py, 60-cue ledger: ~3.9 ms -> ~0.7 ms for that request).
+    """
+    loader = getattr(yaml, "CSafeLoader", None) or yaml.SafeLoader
+    return yaml.load(text, Loader=loader)  # a SafeLoader (sub)class: safe subset
+
 
 async def mount(
     coordinator: ModuleCoordinator, config: dict[str, Any] | None = None
@@ -104,14 +119,14 @@ async def mount(
                 "preceptor-cue-injector: provider:resolve caching failed",
                 exc_info=True,
             )
-        return HookResult(action="continue")
+        return _CONTINUE
 
     async def on_provider_request(_event: str, data: dict[str, Any]) -> HookResult:
         """Dose cues once per session. Fails open on any problem."""
         try:
             session_id = data.get("session_id")
             if not session_id or session_id in dosed_sessions:
-                return HookResult(action="continue")
+                return _CONTINUE
 
             # One shot: mark immediately so this session never gets a second
             # attempt, regardless of what happens below.
@@ -120,7 +135,7 @@ async def mount(
             model_info = session_models.get(session_id)
             if model_info is None:
                 # Never guess a model. No provider:resolve seen yet -> dose nothing.
-                return HookResult(action="continue")
+                return _CONTINUE
             provider, model = model_info
 
             root = _resolve_root(root_template, coordinator)
@@ -129,11 +144,11 @@ async def mount(
             manifest_path = root / "manifests" / f"{session_id}.json"
             if manifest_path.exists():
                 # Already dosed (e.g. a resumed session) -- never mutate.
-                return HookResult(action="continue")
+                return _CONTINUE
 
             ledger_path = root / "ledger" / provider / model / f"{domain}.yaml"
             if not ledger_path.exists():
-                return HookResult(action="continue")
+                return _CONTINUE
 
             started = time.monotonic()
             raw_text = ledger_path.read_text(encoding="utf-8")
@@ -144,19 +159,19 @@ async def mount(
                     read_timeout_s,
                     ledger_path,
                 )
-                return HookResult(action="continue")
+                return _CONTINUE
 
-            ledger_data = yaml.safe_load(raw_text)
+            ledger_data = _load_yaml(raw_text)
             if not isinstance(ledger_data, dict):
-                return HookResult(action="continue")
+                return _CONTINUE
 
             cues = ledger_data.get("cues")
             if not isinstance(cues, list):
-                return HookResult(action="continue")
+                return _CONTINUE
 
             selected = _select_cues(cues, max_active_cues, max_cue_chars)
             if not selected:
-                return HookResult(action="continue")
+                return _CONTINUE
 
             ledger_version = ledger_data.get("version", 0)
             _write_manifest(
@@ -180,7 +195,7 @@ async def mount(
             logger.warning(
                 "preceptor-cue-injector: dosing failed; failing open", exc_info=True
             )
-            return HookResult(action="continue")
+            return _CONTINUE
 
     coordinator.hooks.register(
         "provider:resolve",

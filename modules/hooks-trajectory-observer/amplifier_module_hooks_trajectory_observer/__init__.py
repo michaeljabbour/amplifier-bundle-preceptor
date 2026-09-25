@@ -13,11 +13,12 @@ import hashlib
 import json
 import logging
 import os
+import threading
 import time
 from datetime import datetime, timezone
 from itertools import count
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 # The ecosystem-standard import form. Verified correct against a clean install
 # of amplifier-core; deliberately carries NO type-ignore suppression.
@@ -30,6 +31,9 @@ from typing import Any
 # prints `None`. A suppression here would hide that from the next person and
 # stay behind forever to hide a real breakage later.
 from amplifier_core import HookResult, ModuleCoordinator
+
+if TYPE_CHECKING:  # the executor itself is created lazily, on first use
+    from concurrent.futures import Future, ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +65,69 @@ OBSERVED_EVENTS: tuple[str, ...] = (
 _EAGER_FLUSH_EVENTS = frozenset({"execution:end", "cancel:requested"})
 
 _CONTINUE = HookResult(action="continue")
+
+# --- Off-the-critical-path work ------------------------------------------
+#
+# Hook handlers run sequentially and IN-BAND: whatever a handler does
+# synchronously is added to every tool call and every provider request. Two
+# things this module does are not cheap: hashing a large tool_input (a 1 MB
+# write_file costs ~2 ms of json.dumps + sha256, and it used to be paid
+# twice, on tool:pre AND tool:post) and appending a batch to disk (~0.4 ms
+# every `flush_every` records). Both now run on ONE shared single-worker
+# thread. A single worker is load-bearing: jobs run strictly in submission
+# order, so a hash job queued at event time always finishes before the flush
+# job that serializes its record, and flushes for one session land in the
+# file in the order they were issued.
+#
+# Durability is unchanged where it matters: the eager flush points
+# (execution:end, cancel:requested) and the registered cleanup still BLOCK
+# until everything buffered is on disk, exactly as before. Only the
+# mid-turn opportunistic flush at `flush_every` is fire-and-forget.
+
+# Inputs whose estimated serialized size is below this are hashed inline --
+# a thread hop costs more than hashing a few KB.
+_INLINE_HASH_MAX_CHARS = 4096
+
+# Upper bound on how long an eager flush / cleanup waits for the writer.
+# Fail open: a hung disk must never hang the session.
+_DRAIN_TIMEOUT_S = 10.0
+
+_executor: "ThreadPoolExecutor | None" = None
+_executor_lock = threading.Lock()
+
+
+def _background() -> "ThreadPoolExecutor":
+    global _executor
+    if _executor is None:
+        with _executor_lock:
+            if _executor is None:
+                from concurrent.futures import ThreadPoolExecutor
+
+                _executor = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="preceptor-observer"
+                )
+    return _executor
+
+
+def _estimated_chars(value: Any) -> int:
+    """Cheap O(top-level keys) size estimate; never serializes anything.
+
+    Only decides WHERE a hash is computed (inline vs. background), never
+    WHAT it is, so an underestimate costs latency, not correctness.
+    """
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, dict):
+        total = 0
+        for v in value.values():
+            if isinstance(v, str):
+                total += len(v)
+            elif isinstance(v, (dict, list, tuple)):
+                total += _INLINE_HASH_MAX_CHARS  # nested: assume large
+        return total
+    if isinstance(value, (list, tuple)):
+        return _INLINE_HASH_MAX_CHARS if len(value) > 64 else 0
+    return 0
 
 
 def _sha256_of(value: Any) -> str:
@@ -262,7 +329,16 @@ def _apply_retention(root: Path, retention_days: Any) -> None:
 
 
 class _ObservationBuffer:
-    """In-memory record buffer, flushed opportunistically to a JSONL file."""
+    """In-memory record buffer, flushed to a JSONL file by the background
+    writer.
+
+    `add()` never touches disk. `flush(wait=False)` hands the pending batch
+    to the writer and returns immediately; `flush(wait=True)` also blocks
+    until that batch -- and everything queued before it -- is on disk.
+    Records may carry a `Future` in `tool_input_sha256` (a large input being
+    hashed off-loop); it is resolved inside the writer job, which the
+    single-worker ordering guarantees runs after the hash job.
+    """
 
     def __init__(self, path: Path, flush_every: int = 25) -> None:
         self._path = path
@@ -271,27 +347,68 @@ class _ObservationBuffer:
         except (TypeError, ValueError):
             self._flush_every = 25
         self._records: list[dict[str, Any]] = []
+        self._last: Future[None] | None = None
+        self._dir_ready = False
 
     def add(self, record: dict[str, Any]) -> None:
         self._records.append(record)
         if len(self._records) >= self._flush_every:
-            self.flush()
+            self.flush(wait=False)
 
-    def flush(self) -> None:
-        if not self._records:
+    def flush(self, wait: bool = True) -> None:
+        if self._records:
+            batch, self._records = self._records, []
+            try:
+                self._last = _background().submit(self._write, batch)
+            except Exception:
+                # Executor unavailable (e.g. interpreter shutdown): write inline.
+                logger.debug(
+                    "trajectory-observer: background writer unavailable; "
+                    "writing inline",
+                    exc_info=True,
+                )
+                self._write(batch)
+                self._last = None
+        if wait:
+            self.drain()
+
+    def drain(self) -> None:
+        last = self._last
+        if last is None:
             return
         try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            lines = "\n".join(
-                json.dumps(r, sort_keys=True, default=str) for r in self._records
+            last.result(timeout=_DRAIN_TIMEOUT_S)
+        except Exception:
+            logger.warning(
+                "trajectory-observer: background flush did not complete",
+                exc_info=True,
             )
+
+    def _write(self, batch: list[dict[str, Any]]) -> None:
+        try:
+            for record in batch:
+                digest = record.get("tool_input_sha256")
+                if digest is not None and not isinstance(digest, str):
+                    # A Future from the off-loop hash job, which the
+                    # single-worker ordering has already completed.
+                    try:
+                        record["tool_input_sha256"] = digest.result()
+                    except Exception:
+                        logger.debug(
+                            "trajectory-observer: off-loop hash failed",
+                            exc_info=True,
+                        )
+                        record["tool_input_sha256"] = None
+            if not self._dir_ready:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                self._dir_ready = True
+            lines = "\n".join(json.dumps(r, sort_keys=True, default=str) for r in batch)
             with open(self._path, "a", encoding="utf-8") as fh:
                 fh.write(lines + "\n")
-            self._records.clear()
         except Exception:
             logger.exception(
                 "trajectory-observer: failed to flush %d record(s) to %s",
-                len(self._records),
+                len(batch),
                 self._path,
             )
 
@@ -357,14 +474,58 @@ class _SessionState:
         self.provider: str | None = None
         self.model: str | None = None
         self._cue_ids: list[str] | None = None
+        self._cue_ids_final = False
+        # tool_call_id -> (tool_input object, digest). loop-streaming passes
+        # the SAME `tool_call.arguments` object on tool:pre and tool:post, so
+        # the post record reuses the pre record's digest instead of
+        # re-serializing a possibly multi-MB input a second time.
+        self._pending_digests: dict[Any, tuple[Any, Any]] = {}
 
     def next_id(self) -> str:
         return f"obs-{next(self._counter)}"
 
-    def cue_ids(self) -> list[str]:
+    def cue_ids(self, event: str) -> list[str]:
+        """Dosed cue ids from the sibling manifest, read at most twice.
+
+        Read on the first event (a resumed session's manifest already
+        exists), and -- if that found nothing -- once more on the first
+        `provider:request`. The injector writes the manifest on that same
+        emit at priority 20, before this handler (200) runs; the first
+        event of a new session (execution:start) precedes it, so a
+        read-once cache recorded `[]` for every record of every dosed
+        session. After that second look the answer is final.
+        """
         if self._cue_ids is None:
             self._cue_ids = _load_dosed_cue_ids(self._root, self._session_id)
+            self._cue_ids_final = bool(self._cue_ids)
+        elif not self._cue_ids_final and event == "provider:request":
+            self._cue_ids = _load_dosed_cue_ids(self._root, self._session_id)
+            self._cue_ids_final = True
         return self._cue_ids
+
+    def digest(self, event: str, data: dict[str, Any]) -> Any:
+        """sha256 of tool_input: a str, None, or a Future resolved by the
+        writer. Same bytes hashed as `_sha256_of` always hashed."""
+        tool_input = data.get("tool_input")
+        if tool_input is None:
+            return None
+        call_id = data.get("tool_call_id")
+        if call_id is not None and event != "tool:pre":
+            cached = self._pending_digests.pop(call_id, None)
+            if cached is not None and cached[0] is tool_input:
+                return cached[1]
+        if _estimated_chars(tool_input) < _INLINE_HASH_MAX_CHARS:
+            digest: Any = _sha256_of(tool_input)
+        else:
+            try:
+                digest = _background().submit(_sha256_of, tool_input)
+            except RuntimeError:  # executor shut down (interpreter exit)
+                digest = _sha256_of(tool_input)
+        if call_id is not None and event == "tool:pre":
+            if len(self._pending_digests) > 256:  # bound: orphaned pre events
+                self._pending_digests.clear()
+            self._pending_digests[call_id] = (tool_input, digest)
+        return digest
 
     def observe_resolve(self, data: dict[str, Any]) -> None:
         provider = data.get("provider")
@@ -375,7 +536,6 @@ class _SessionState:
             self.model = model
 
     def build_record(self, event: str, data: dict[str, Any]) -> dict[str, Any]:
-        tool_input = data.get("tool_input")
         return {
             "v": 1,
             "id": self.next_id(),
@@ -386,13 +546,11 @@ class _SessionState:
             "model": self.model,
             "event": event,
             "tool_name": data.get("tool_name"),
-            "tool_input_sha256": (
-                _sha256_of(tool_input) if tool_input is not None else None
-            ),
+            "tool_input_sha256": self.digest(event, data),
             "ok": _derive_ok(event, data),
             "iteration": data.get("iteration"),
             "parallel_group": data.get("parallel_group_id"),
-            "cue_ids_dosed": self.cue_ids(),
+            "cue_ids_dosed": self.cue_ids(event),
         }
 
 
@@ -489,7 +647,7 @@ async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = 
             buffer.add(state.build_record(event, payload))
 
             if event in _EAGER_FLUSH_EVENTS:
-                buffer.flush()
+                buffer.flush(wait=True)
                 if shapes is not None:
                     shapes.flush()
         except Exception:
@@ -505,7 +663,7 @@ async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = 
 
     async def cleanup() -> None:
         try:
-            buffer.flush()
+            buffer.flush(wait=True)
             if shapes is not None:
                 shapes.flush()
         except Exception:

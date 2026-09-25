@@ -78,6 +78,15 @@ _REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "forget": ("since",),
 }
 
+# operation -> OPTIONAL top-level fields _dispatch() reads. Together with
+# _REQUIRED_FIELDS this is the complete set of fields an operation consumes,
+# which is what lets _build_input_schema() advertise only the properties the
+# instance's operations can use.
+_OPTIONAL_FIELDS: dict[str, tuple[str, ...]] = {
+    "cues": ("provider", "model", "domain"),
+    "observations": ("session_id", "limit"),
+}
+
 # Extra teaching text appended to a "missing required field" error for fields whose
 # absence reflects a design invariant worth restating, not just a shape mismatch.
 _MISSING_FIELD_HINTS: dict[str, str] = {
@@ -232,7 +241,7 @@ _INPUT_SCHEMA: dict[str, Any] = {
 
 
 def _build_input_schema(allowed_operations: frozenset[str]) -> dict[str, Any]:
-    """Return a fresh, instance-scoped copy of `_INPUT_SCHEMA`.
+    """Return a fresh, instance-scoped schema narrowed to this instance.
 
     Never return (or mutate) `_INPUT_SCHEMA` itself. Multiple `PreceptorTool`
     instances with different `writable`/`surface` configs coexist in the same
@@ -244,11 +253,22 @@ def _build_input_schema(allowed_operations: frozenset[str]) -> dict[str, Any]:
     every other instance's `operation` enum, including one already handed to
     a provider.
 
-    The `operation` enum is narrowed to what THIS instance can actually do --
-    a hint to the calling model, not a security boundary. execute() re-checks
-    every gate regardless of what an instance's schema advertises.
+    Two narrowings, both hints to the calling model, neither a security
+    boundary -- execute() re-checks every gate and never consults the schema:
+
+    - the `operation` enum lists what THIS instance can actually do;
+    - `properties` lists only fields those operations consume
+      (_REQUIRED_FIELDS | _OPTIONAL_FIELDS). The schema is re-sent on every
+      provider request, and the read-only instance in every full-loop
+      session was paying for eleven write-only fields (text, origin,
+      entry/exit_evidence, verdict, n_per_arm, ...) it rejects anyway.
     """
+    used: set[str] = {"operation"}
+    for op in allowed_operations:
+        used.update(_REQUIRED_FIELDS.get(op, ()))
+        used.update(_OPTIONAL_FIELDS.get(op, ()))
     schema = copy.deepcopy(_INPUT_SCHEMA)
+    schema["properties"] = {k: v for k, v in schema["properties"].items() if k in used}
     schema["properties"]["operation"]["enum"] = sorted(allowed_operations)
     return schema
 
@@ -393,28 +413,22 @@ class PreceptorTool:
         # deleting your own records works, because on every branch it does.
         if self._writable:
             return (
-                "Read and mutate the preceptor evidence-gated cue ledger: propose, "
-                "promote, shadow, retire, restore, pin, or mute per-model/domain "
-                "instruction cues based on measured evidence, log assessments, and "
-                "delete a user's own recorded observations on request (forget). "
-                "This instance holds full ledger-write access (writable: true)."
+                "Read and mutate the preceptor evidence-gated cue ledger "
+                "(writable): propose, promote, shadow, retire, restore, pin, or "
+                "mute per-model/domain cues on measured evidence; log "
+                "assessments; forget deletes the user's own observation records."
             )
         if self._surface == "consent":
             return (
-                "Preceptor recording controls: show what is being recorded "
-                "(status), summarize the observation records collected about the "
-                "user (observations), and delete those records on request "
-                "(forget). Cue-ledger operations are not exposed on this "
-                "instance."
+                "Preceptor recording controls: status (what is recorded), "
+                "observations (summary of records about the user), forget "
+                "(delete them). No cue-ledger operations on this instance."
             )
         return (
             "Read the preceptor evidence-gated cue ledger: per-model/domain "
-            "instruction cues that are proposed, promoted, shadowed, retired, "
-            "or restored based on measured evidence, never on judgment alone. "
-            "Deleting the user's own recorded observations (forget) is always "
-            "available. Ledger WRITES require the credentialer agent's "
-            "write-mounted instance (writable: true) -- this instance has "
-            "read access only."
+            "cues changed only on measured evidence. forget deletes the user's "
+            "own observation records. Read-only: ledger writes need the "
+            "credentialer agent's writable instance."
         )
 
     @property

@@ -16,7 +16,7 @@ test:
 	@for m in $(MODULES); do \
 	  printf '%-30s ' "$$m"; \
 	  (cd modules/$$m && uv run --no-project --with pytest --with pytest-asyncio \
-	     --with pyyaml pytest tests/ -q 2>&1 | tail -1); \
+	     --with pyyaml --with amplifier-core pytest tests/ -q 2>&1 | tail -1); \
 	done
 	@# Cross-module seam. Nothing inside a single module's suite can catch a
 	@# disagreement BETWEEN modules -- three separately-green _project_slug

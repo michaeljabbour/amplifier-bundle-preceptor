@@ -590,3 +590,42 @@ async def test_large_input_hash_identical_and_computed_once_for_pre_and_post(
     await handler("execution:end", {"status": "completed"})
     posts = [r for r in _read_records(tmp_path) if r["event"] == "tool:post"]
     assert posts[-1]["tool_input_sha256"] == real(other)
+
+
+@pytest.mark.asyncio
+async def test_cue_ids_seen_when_manifest_lands_on_first_provider_request(
+    tmp_path: Path,
+) -> None:
+    """The injector writes the dosing manifest on the first provider:request
+    (priority 20), after this session's first event (execution:start). A
+    read-once cache recorded [] forever; the second look must pick it up."""
+    coordinator = _make_coordinator()
+    await mount(coordinator, {"enabled": True, "root": str(tmp_path)})
+    handler = _registered_handler(coordinator)
+
+    await handler("execution:start", {})
+    manifest = tmp_path / "manifests" / "sess-1.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"cues": [{"id": "cue-001"}, {"id": "cue-002"}]}))
+    await handler("provider:request", {"provider": "anthropic"})
+    await handler("tool:pre", {"tool_name": "x"})
+    await handler("execution:end", {"status": "completed"})
+
+    by_event = {r["event"]: r for r in _read_records(tmp_path)}
+    assert by_event["execution:start"]["cue_ids_dosed"] == []
+    assert by_event["provider:request"]["cue_ids_dosed"] == ["cue-001", "cue-002"]
+    assert by_event["tool:pre"]["cue_ids_dosed"] == ["cue-001", "cue-002"]
+
+
+@pytest.mark.asyncio
+async def test_resumed_session_manifest_read_on_first_event(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifests" / "sess-1.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"cues": [{"id": "cue-009"}]}))
+
+    coordinator = _make_coordinator()
+    await mount(coordinator, {"enabled": True, "root": str(tmp_path)})
+    handler = _registered_handler(coordinator)
+    await handler("execution:start", {})
+    await handler("execution:end", {"status": "completed"})
+    assert all(r["cue_ids_dosed"] == ["cue-009"] for r in _read_records(tmp_path))

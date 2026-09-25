@@ -474,6 +474,7 @@ class _SessionState:
         self.provider: str | None = None
         self.model: str | None = None
         self._cue_ids: list[str] | None = None
+        self._cue_ids_final = False
         # tool_call_id -> (tool_input object, digest). loop-streaming passes
         # the SAME `tool_call.arguments` object on tool:pre and tool:post, so
         # the post record reuses the pre record's digest instead of
@@ -483,9 +484,23 @@ class _SessionState:
     def next_id(self) -> str:
         return f"obs-{next(self._counter)}"
 
-    def cue_ids(self) -> list[str]:
+    def cue_ids(self, event: str) -> list[str]:
+        """Dosed cue ids from the sibling manifest, read at most twice.
+
+        Read on the first event (a resumed session's manifest already
+        exists), and -- if that found nothing -- once more on the first
+        `provider:request`. The injector writes the manifest on that same
+        emit at priority 20, before this handler (200) runs; the first
+        event of a new session (execution:start) precedes it, so a
+        read-once cache recorded `[]` for every record of every dosed
+        session. After that second look the answer is final.
+        """
         if self._cue_ids is None:
             self._cue_ids = _load_dosed_cue_ids(self._root, self._session_id)
+            self._cue_ids_final = bool(self._cue_ids)
+        elif not self._cue_ids_final and event == "provider:request":
+            self._cue_ids = _load_dosed_cue_ids(self._root, self._session_id)
+            self._cue_ids_final = True
         return self._cue_ids
 
     def digest(self, event: str, data: dict[str, Any]) -> Any:
@@ -535,7 +550,7 @@ class _SessionState:
             "ok": _derive_ok(event, data),
             "iteration": data.get("iteration"),
             "parallel_group": data.get("parallel_group_id"),
-            "cue_ids_dosed": self.cue_ids(),
+            "cue_ids_dosed": self.cue_ids(event),
         }
 
 

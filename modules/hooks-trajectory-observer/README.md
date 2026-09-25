@@ -40,7 +40,7 @@ One JSON object per line, per observed event:
 | `ok` | Coarse boolean outcome, derived from the event/result, never a message |
 | `iteration` | Loop iteration number, when the event carries one |
 | `parallel_group` | Parallel tool-call group ID, when applicable |
-| `cue_ids_dosed` | IDs of any preceptor cues active for this session (read from the sibling dosing manifest, if present) |
+| `cue_ids_dosed` | IDs of any preceptor cues active for this session (read from the sibling dosing manifest, if present). The manifest is read on the first event and, if absent then, once more on the first `provider:request` (where the injector writes it), so in a new session only records before that request carry `[]` |
 
 Observed events: `tool:pre`, `tool:post`, `tool:error`, `provider:request`,
 `provider:response`, `provider:retry`, `provider:error`,
